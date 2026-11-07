@@ -19,7 +19,15 @@ const el = ref<HTMLElement>();
 const scrollTop = ref(0);
 const viewH = ref(600);
 const charW = ref(7.8);
-const flashLine = ref(-1);
+/** What is flashing, by id, so it stays on the right line if the layout re-flows meanwhile. */
+const flash = ref<{ id: string; kind: "fold" | "tag" } | null>(null);
+const flashLine = computed(() => {
+  const f = flash.value;
+  const lay = mainLayout.value;
+  if (!f || !lay) return -1;
+  return (f.kind === "fold" ? lay.foldLine.get(f.id) : lay.tagLine.get(f.id)) ?? -1;
+});
+let flashTimer: number | undefined;
 
 const lines = computed(() => mainLayout.value?.lines ?? []);
 
@@ -85,8 +93,9 @@ watch(
     if (top < e.scrollTop + LINE_H * 2 || top > e.scrollTop + e.clientHeight - LINE_H * 3) {
       e.scrollTop = Math.max(0, top - e.clientHeight / 3);
     }
-    flashLine.value = line;
-    window.setTimeout(() => (flashLine.value = -1), 900);
+    flash.value = rev;
+    clearTimeout(flashTimer);
+    flashTimer = window.setTimeout(() => (flash.value = null), 900);
   },
   { flush: "post" },
 );
@@ -106,13 +115,15 @@ function onClick(ev: MouseEvent) {
   if (g) return toggle(g.dataset.toggle!);
   const fb = t.closest<HTMLElement>("[data-focus]");
   if (fb) return setFocus(fb.dataset.focus!);
+  const pb = t.closest<HTMLElement>("[data-panel]");
+  if (pb) return openPanel(listForFold(pb.dataset.panel!) ?? null);
 
   const chip = t.closest<HTMLElement>("[data-fold]");
   if (chip) {
     const id = chip.dataset.fold!;
     state.cursor = id;
     if (ev.metaKey || ev.ctrlKey) return setFocus(id);
-    if (folds.value[id]?.kind === "columns" && !ev.altKey) return openPanel(listForFold(id) ?? null);
+    if (folds.value[id]?.kind === "columns" && ev.altKey) return openPanel(listForFold(id) ?? null);
     return ev.altKey ? expandDeep(id) : toggle(id);
   }
   const tg = t.closest<HTMLElement>("[data-tag]");
@@ -125,8 +136,8 @@ function onClick(ev: MouseEvent) {
 function chipTitle(id: string): string {
   const f = folds.value[id];
   if (!f) return "";
-  const what = f.kind === "columns" ? "Click: show in column panel · Alt-click: expand inline" : "Click: expand · Alt-click: expand all inside";
-  return `${f.name} (${f.kind})\n${what}\n⌘/Ctrl-click: focus`;
+  const what = f.kind === "columns" ? "Click: expand · Alt-click: show in column panel" : "Click: expand · Alt-click: expand all inside\n⌘/Ctrl-click: focus";
+  return `${f.name} (${f.kind})\n${what}`;
 }
 </script>
 
@@ -144,7 +155,13 @@ function chipTitle(id: string): string {
             <template v-if="l.opens">
               <button class="g-btn" :data-toggle="l.opens[0]" :title="`Collapse ${folds[l.opens[0]]?.name}`">▾</button>
               <button
-                v-if="folds[l.opens[0]]?.kind !== 'columns'"
+                v-if="folds[l.opens[0]]?.kind === 'columns'"
+                class="g-btn g-focus"
+                :data-panel="l.opens[0]"
+                title="Show in column panel"
+              >≡</button>
+              <button
+                v-else
                 class="g-btn g-focus"
                 :data-focus="l.opens[0]"
                 :title="`Focus ${folds[l.opens[0]]?.name}`"

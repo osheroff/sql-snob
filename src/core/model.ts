@@ -43,6 +43,8 @@ export interface ColumnList {
 
 export interface PrintOptions {
   removeParens: boolean;
+  /** Drop casts that restate a literal's type: `'x'::TEXT` -> `'x'`, `1000::BIGINT` -> `1000`. */
+  hideObviousCasts: boolean;
   collapseAliases: boolean;
   /** SELECT lists with at least this many columns become a `columns` fold. */
   columnFoldThreshold: number;
@@ -50,6 +52,7 @@ export interface PrintOptions {
 
 export const defaultPrintOptions: PrintOptions = {
   removeParens: true,
+  hideObviousCasts: true,
   collapseAliases: true,
   columnFoldThreshold: 8,
 };

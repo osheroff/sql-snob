@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed } from "vue";
-import { folds, listForFold, openPanel, reveal, setFocus, state } from "../state/store";
+import { folds, isOpen, listForFold, openPanel, reveal, setFocus, state, toggle } from "../state/store";
 
 const props = defineProps<{ id: string; depth: number; expanded: Set<string> }>();
 const emit = defineEmits<{ (e: "toggle", id: string): void }>();
@@ -11,11 +11,12 @@ const isExpanded = computed(() => props.expanded.has(props.id));
 const ICON: Record<string, string> = { cte: "W", derived: "F", subquery: "S", branch: "U", columns: "≡" };
 
 function onClick() {
-  if (f.value.kind === "columns") openPanel(listForFold(props.id) ?? null);
-  else reveal(props.id);
+  reveal(props.id);
+  if (f.value.kind === "columns" && !isOpen(props.id)) toggle(props.id);
 }
 function onDbl() {
-  if (f.value.kind !== "columns") setFocus(props.id);
+  if (f.value.kind === "columns") openPanel(listForFold(props.id) ?? null);
+  else setFocus(props.id);
 }
 </script>
 

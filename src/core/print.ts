@@ -8,6 +8,7 @@ import type { Program } from "sql-parser-cst";
 import {
   type Doc,
   type Kind,
+  fill,
   fold,
   group,
   hardline,
@@ -309,7 +310,15 @@ class Printer {
       case "prefix_op_expr":
         return this.prefix(n);
       case "cast_operator_expr":
+        if (this.opts.hideObviousCasts && isObviousCast(n.left, n.right)) return this.node(n.left, parent);
         return [this.node(n.left, n), text("::", "op"), this.node(n.right, n)];
+      case "cast_expr": {
+        const arg = n.args?.expr;
+        if (this.opts.hideObviousCasts && arg?.type === "cast_arg" && !arg.format && isObviousCast(arg.expr, arg.dataType)) {
+          return this.node(arg.expr, parent);
+        }
+        return this.generic(n);
+      }
       case "func_call":
         return [
           n.name.type === "identifier" ? text(n.name.text, "fn") : this.node(n.name, n),
@@ -317,16 +326,25 @@ class Printer {
           n.filter ? [space, this.node(n.filter, n)] : [],
           n.over ? [space, this.node(n.over, n)] : [],
         ];
-      case "case_expr":
+      case "case_expr": {
+        // Two or more branches: always one branch per line. A single WHEN may stay on one line.
+        const br = n.clauses.length > 1 ? hardline : line;
         return group([
           this.kw(n.caseKw),
           n.expr ? [space, this.node(n.expr, n)] : [],
-          indent(n.clauses.map((c: N) => [line, this.node(c, n)])),
-          line,
+          indent(n.clauses.map((c: N) => [br, this.node(c, n)])),
+          br,
           this.kw(n.endKw),
         ]);
+      }
       case "case_when":
-        return [this.kw(n.whenKw), space, this.node(n.condition, n), space, this.kw(n.thenKw), space, this.node(n.result, n)];
+        // THEN stays on the WHEN line if the branch fits; otherwise it gets its own, indented line.
+        return group([
+          this.kw(n.whenKw),
+          space,
+          this.node(n.condition, n),
+          indent([line, this.kw(n.thenKw), space, this.node(n.result, n)]),
+        ]);
       case "case_else":
         return [this.kw(n.elseKw), space, this.node(n.result, n)];
       case "alias":
@@ -421,9 +439,10 @@ class Printer {
     });
     this.columns[listId] = list;
 
-    if (!f) return group([head, indent([line, join([text(",", "op"), line], docs)])]);
+    // Columns flow like a paragraph: as many per line as fit.
+    const body = fill(join([text(",", "op"), line], docs));
+    if (!f) return group([head, indent([line, body])]);
     this.end();
-    const body = join([text(",", "op"), hardline], docs);
     return [this.comments(n.columns), head, space, fold(f.id, indent([hardline, body]), body)];
   }
 
@@ -613,6 +632,35 @@ function identText(n: N): string {
   if (n.type === "identifier") return n.text;
   if (n.type === "member_expr" && n.property?.type === "identifier") return n.property.text;
   return "";
+}
+
+const TEXT_TYPES = new Set(["TEXT", "VARCHAR", "STRING", "CHAR", "CHARACTER", "CHARACTER VARYING", "CHAR VARYING", "NVARCHAR"]);
+const INT_TYPES = new Set(["INT", "INTEGER", "BIGINT", "SMALLINT", "TINYINT", "BYTEINT", "INT2", "INT4", "INT8", "NUMBER", "NUMERIC", "DECIMAL"]);
+const DECIMAL_TYPES = new Set(["DOUBLE", "DOUBLE PRECISION", "FLOAT", "FLOAT4", "FLOAT8", "REAL", "NUMBER", "NUMERIC", "DECIMAL"]);
+
+/** Plain type name (`TEXT`, `DOUBLE PRECISION`), or "" for parameterized/complex types. */
+function typeName(t: N): string {
+  if (!t) return "";
+  if (t.type === "identifier") return String(t.name ?? t.text).toUpperCase();
+  if (t.type === "data_type_name") return opName(t.name);
+  return "";
+}
+
+/** A literal cast to the type it already plainly is. NULL casts are kept: they set types in UNIONs. */
+function isObviousCast(expr: N, type: N): boolean {
+  const name = typeName(type);
+  if (!name) return false;
+  expr = unwrapParens(expr); // generated SQL writes `('Method')::TEXT`
+  switch (expr.type) {
+    case "string_literal":
+      return TEXT_TYPES.has(name);
+    case "number_literal":
+      return /^\d+$/.test(expr.text) ? INT_TYPES.has(name) : DECIMAL_TYPES.has(name);
+    case "boolean_literal":
+      return name === "BOOLEAN" || name === "BOOL";
+    default:
+      return false;
+  }
 }
 
 function canUnwrap(n: N, parent: N): boolean {

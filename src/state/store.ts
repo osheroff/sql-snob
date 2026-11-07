@@ -7,6 +7,26 @@ import { defaultPrintOptions, type FoldInfo, type ParseError, type PrintOptions,
 import type { Request, Response } from "../worker/protocol";
 
 const SQL_KEY = "sql-snob:sql";
+const OUTLINE_KEY = "sql-snob:outline";
+/** Set while a query is being viewed, so a page reload goes back to the viewer, not the paste box. */
+const VIEWING_KEY = "sql-snob:viewing";
+
+function readOutlinePref(): boolean {
+  try {
+    return localStorage.getItem(OUTLINE_KEY) === "open";
+  } catch {
+    return false;
+  }
+}
+
+export function toggleOutline(): void {
+  state.outlineOpen = !state.outlineOpen;
+  try {
+    localStorage.setItem(OUTLINE_KEY, state.outlineOpen ? "open" : "closed");
+  } catch {
+    /* storage unavailable */
+  }
+}
 
 // ---- worker client ------------------------------------------------------------
 
@@ -40,6 +60,8 @@ export const state = reactive({
   /** Selected column (tag id) — highlighted in the main view and the panel. */
   selectedTag: null as string | null,
   hoverTag: null as string | null,
+  /** Outline sidebar expanded (collapsed to a rail by default; remembered per browser). */
+  outlineOpen: readOutlinePref(),
   /** Keyboard cursor: a fold id. */
   cursor: null as string | null,
   /** A fold or tag the main view should scroll to after the next layout. */
@@ -73,6 +95,7 @@ export async function load(sql: string, restore = false): Promise<void> {
   state.status = "loading";
   try {
     sessionStorage.setItem(SQL_KEY, sql);
+    sessionStorage.setItem(VIEWING_KEY, "1");
   } catch {
     /* storage unavailable */
   }
@@ -85,7 +108,7 @@ export async function load(sql: string, restore = false): Promise<void> {
   }
   setResult(res.result, res.ms);
   const r = res.result;
-  openSet.value = new Set(Object.values(r.folds).filter((f) => f.defaultOpen).map((f) => f.id));
+  openSet.value = new Set(Object.keys(r.folds)); // start fully expanded
   state.focus = null;
   state.panel = null;
   state.selectedTag = null;
@@ -111,16 +134,22 @@ function setResult(r: PrintResult, ms: { parse: number; print: number }) {
 }
 
 export function reset(): void {
+  try {
+    sessionStorage.removeItem(VIEWING_KEY);
+  } catch {
+    /* storage unavailable */
+  }
   state.status = "empty";
   result.value = null;
   history.pushState(null, "", location.pathname);
 }
 
-export function restoreSession(): string {
+/** The last query, and whether it was being viewed when the page was left. */
+export function restoreSession(): { sql: string; viewing: boolean } {
   try {
-    return sessionStorage.getItem(SQL_KEY) ?? "";
+    return { sql: sessionStorage.getItem(SQL_KEY) ?? "", viewing: sessionStorage.getItem(VIEWING_KEY) === "1" };
   } catch {
-    return "";
+    return { sql: "", viewing: false };
   }
 }
 
@@ -176,16 +205,16 @@ export function descendants(id: string | null): string[] {
   return out;
 }
 
-/** Expand a fold and everything under it (query folds only; column lists stay folded). */
+/** Expand a fold and everything under it. */
 export function expandDeep(id: string): void {
   setOpen((s) => {
     s.add(id);
-    for (const d of descendants(id)) if (folds.value[d].kind !== "columns") s.add(d);
+    for (const d of descendants(id)) s.add(d);
   });
 }
 
 export function expandAll(): void {
-  const ids = descendants(state.focus).filter((d) => folds.value[d].kind !== "columns");
+  const ids = descendants(state.focus);
   setOpen((s) => ids.forEach((d) => s.add(d)));
 }
 
@@ -264,16 +293,16 @@ export function selectColumn(tagId: string): void {
   state.reveal = { id: tagId, kind: "tag" };
 }
 
-// ---- URL hash: #f=<focus>&p=<panel>&o=<open,...> --------------------------------
+// ---- URL hash: #f=<focus>&p=<panel>&c=<collapsed,...> ---------------------------
 
 function writeHash(push: boolean) {
   if (state.status !== "ready" && state.status !== "loading") return;
   const p = new URLSearchParams();
   if (state.focus) p.set("f", state.focus);
   if (state.panel) p.set("p", state.panel);
-  const defaults = new Set(Object.values(folds.value).filter((f) => f.defaultOpen).map((f) => f.id));
-  const opened = [...openSet.value].filter((id) => !defaults.has(id));
-  if (opened.length) p.set("o", opened.join(","));
+  // Folds start open, so the URL records the collapsed ones.
+  const closed = Object.keys(folds.value).filter((id) => !openSet.value.has(id));
+  if (closed.length) p.set("c", closed.join(","));
   const url = `${location.pathname}#${p.toString().replace(/%2C/g, ",")}`;
   if (url === location.pathname + location.hash) return;
   if (push) history.pushState(null, "", url);
@@ -288,11 +317,8 @@ export function applyHash(initial = false): void {
   const panel = p.get("p");
   state.focus = f && fs[f] ? f : null;
   state.panel = panel && result.value?.columns[panel] ? panel : null;
-  const opened = (p.get("o") ?? "").split(",").filter((id) => fs[id]);
-  if (opened.length || !initial) {
-    const defaults = Object.values(fs).filter((x) => x.defaultOpen).map((x) => x.id);
-    openSet.value = new Set([...defaults, ...opened]);
-  }
+  const closed = new Set((p.get("c") ?? "").split(","));
+  openSet.value = new Set(Object.keys(fs).filter((id) => !closed.has(id)));
   if (initial) writeHash(false);
 }
 

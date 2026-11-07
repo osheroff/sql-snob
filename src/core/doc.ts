@@ -35,7 +35,16 @@ export interface Tag {
   c: Doc;
 }
 
-export type Doc = Text | Line | Group | Indent | Fold | Tag | Doc[];
+/**
+ * Paragraph-style list: `c` alternates content and separators (`[item, sep, item, sep, item]`).
+ * Each separator breaks only if the next item doesn't fit on the current line.
+ */
+export interface Fill {
+  t: "F";
+  c: Doc[];
+}
+
+export type Doc = Text | Line | Group | Indent | Fold | Tag | Fill | Doc[];
 
 export const text = (s: string, k: Kind = "plain"): Text => ({ t: "s", s, k });
 export const line: Line = { t: "l", m: 0 };
@@ -46,6 +55,7 @@ export const group = (c: Doc): Group => ({ t: "g", c });
 export const indent = (c: Doc): Indent => ({ t: "i", c });
 export const fold = (id: string, c: Doc, body?: Doc): Fold => ({ t: "f", id, c, body });
 export const tag = (id: string, c: Doc): Tag => ({ t: "t", id, c });
+export const fill = (c: Doc[]): Fill => ({ t: "F", c });
 
 export function join(sep: Doc, docs: Doc[]): Doc[] {
   const out: Doc[] = [];
@@ -66,6 +76,8 @@ export function eachFold(doc: Doc, fn: (f: Fold) => void): void {
     } else if (d.t === "f") {
       fn(d);
       stack.push(d.c); // `body` is always a sub-doc of `c`, so it isn't walked separately
+    } else if (d.t === "F") {
+      for (let i = d.c.length - 1; i >= 0; i--) stack.push(d.c[i]);
     } else if (d.t === "g" || d.t === "i" || d.t === "t") {
       stack.push(d.c);
     }

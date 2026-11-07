@@ -17,6 +17,7 @@ import {
   setFocus,
   state,
   toggle,
+  toggleOutline,
 } from "./state/store";
 import Breadcrumbs from "./ui/Breadcrumbs.vue";
 import ColumnPanel from "./ui/ColumnPanel.vue";
@@ -43,7 +44,7 @@ async function copy() {
 }
 
 function editSql() {
-  state.status = "empty";
+  reset();
 }
 
 function onOpt() {
@@ -78,9 +79,7 @@ function onKey(ev: KeyboardEvent) {
     }
     case "Enter":
     case "o":
-      if (!cur) return;
-      if (folds.value[cur]?.kind === "columns") openPanel(listForFold(cur) ?? null);
-      else toggle(cur);
+      if (cur) toggle(cur);
       break;
     case "f":
       if (cur) setFocus(cur);
@@ -105,6 +104,9 @@ function onKey(ev: KeyboardEvent) {
     case "C":
       collapseAll();
       break;
+    case "s":
+      toggleOutline();
+      break;
     case "?":
       showHelp.value = !showHelp.value;
       break;
@@ -114,11 +116,15 @@ function onKey(ev: KeyboardEvent) {
   ev.preventDefault();
 }
 
+// Restore the last query before child components read `state.sql`.
+{
+  const saved = restoreSession();
+  if (saved.sql && saved.viewing) load(saved.sql, true);
+  else state.sql = saved.sql;
+}
+
 onMounted(() => {
   window.addEventListener("keydown", onKey);
-  const saved = restoreSession();
-  if (saved && location.hash) load(saved, true);
-  else state.sql = saved;
 });
 onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
 </script>
@@ -126,7 +132,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
 <template>
   <PasteBox v-if="state.status === 'empty' || (state.status === 'loading' && !result)" />
   <ParseErrorView v-else-if="state.status === 'error'" @edit="editSql" />
-  <div v-else class="app" :class="{ 'with-panel': !!state.panel }">
+  <div v-else class="app" :class="{ 'with-panel': !!state.panel, 'outline-closed': !state.outlineOpen }">
     <header class="top">
       <button class="logo" title="New query" @click="reset">sql-snob</button>
       <Breadcrumbs class="bc" />
@@ -140,6 +146,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
           <button class="btn" @click="showOpts = !showOpts">Options</button>
           <div v-if="showOpts" class="opts" @mouseleave="showOpts = false">
             <label><input v-model="state.opts.removeParens" type="checkbox" @change="onOpt" /> Remove redundant parentheses</label>
+            <label><input v-model="state.opts.hideObviousCasts" type="checkbox" @change="onOpt" /> Hide obvious casts (<code>'x'::TEXT</code>)</label>
             <label><input v-model="state.opts.collapseAliases" type="checkbox" @change="onOpt" /> Collapse <code>"X" AS "X"</code></label>
             <label>
               Fold SELECT lists with ≥
@@ -151,7 +158,10 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
         <button class="btn" title="Keyboard shortcuts (?)" @click="showHelp = !showHelp">?</button>
       </div>
     </header>
-    <Outline class="outline" />
+    <Outline v-if="state.outlineOpen" class="outline" />
+    <button v-else class="outline rail" title="Show outline (s)" @click="toggleOutline">
+      <span class="rail-label">Outline</span>
+    </button>
     <SqlView class="main" />
     <ColumnPanel v-if="state.panel" class="side" />
     <footer class="status">
@@ -163,19 +173,20 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
         <h3>Keyboard</h3>
         <dl>
           <dt>j / k</dt><dd>Next / previous fold</dd>
-          <dt>Enter / o</dt><dd>Expand or collapse the fold (column lists open in the panel)</dd>
+          <dt>Enter / o</dt><dd>Expand or collapse the fold</dd>
           <dt>f</dt><dd>Focus the fold</dd>
           <dt>c</dt><dd>Show columns of the fold (or the focused query)</dd>
           <dt>u / Esc</dt><dd>Up one level (Esc closes the panel first)</dd>
           <dt>E / C</dt><dd>Expand all / collapse all in view</dd>
+          <dt>s</dt><dd>Show / hide the outline</dd>
         </dl>
         <h3>Mouse</h3>
         <dl>
-          <dt>Click chip</dt><dd>Expand (column lists: open in panel)</dd>
-          <dt>Alt-click chip</dt><dd>Expand everything inside</dd>
+          <dt>Click chip</dt><dd>Expand</dd>
+          <dt>Alt-click chip</dt><dd>Expand everything inside (column lists: open in panel)</dd>
           <dt>⌘/Ctrl-click chip</dt><dd>Focus</dd>
-          <dt>Gutter ▾ / ⤢</dt><dd>Collapse / focus an open fold</dd>
-          <dt>Outline</dt><dd>Click to show, double-click to focus</dd>
+          <dt>Gutter ▾ / ⤢ / ≡</dt><dd>Collapse / focus / show columns in panel</dd>
+          <dt>Outline</dt><dd>Click to show, double-click to focus (column lists: open in panel)</dd>
         </dl>
       </div>
     </div>
@@ -199,6 +210,32 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
     "top top top"
     "outline main side"
     "status status status";
+}
+.app.outline-closed {
+  grid-template-columns: 28px minmax(0, 1fr);
+}
+.app.outline-closed.with-panel {
+  grid-template-columns: 28px minmax(0, 1fr) minmax(320px, 38%);
+}
+.rail {
+  border: 0;
+  border-right: 1px solid var(--border);
+  background: var(--panel-bg);
+  color: var(--muted);
+  cursor: pointer;
+  padding: 10px 0 0;
+  display: flex;
+  justify-content: center;
+}
+.rail:hover {
+  color: var(--accent);
+  background: var(--hov);
+}
+.rail-label {
+  writing-mode: vertical-rl;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
 }
 .top {
   grid-area: top;

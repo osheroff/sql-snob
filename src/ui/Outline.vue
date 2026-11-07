@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, watch } from "vue";
-import { ancestors, folds, result, state } from "../state/store";
+import { ancestors, folds, result, state, toggleOutline } from "../state/store";
 import OutlineNode from "./OutlineNode.vue";
 
 /** Outline nodes expanded in the tree (independent of fold state in the code view). */
@@ -39,7 +39,10 @@ function toggle(id: string) {
 
 <template>
   <nav class="outline">
-    <div class="head">Outline</div>
+    <div class="head">
+      <span>Outline</span>
+      <button class="collapse" title="Collapse outline (s)" @click="toggleOutline">«</button>
+    </div>
     <ul v-if="result?.roots.length">
       <OutlineNode v-for="id in result.roots" :id="id" :key="id" :depth="0" :expanded="expanded" @toggle="toggle" />
     </ul>
@@ -55,7 +58,19 @@ function toggle(id: string) {
   background: var(--panel-bg);
   padding: 6px 4px;
 }
+.collapse {
+  border: 0;
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 14px;
+  padding: 0 4px;
+}
+.collapse:hover { color: var(--accent); }
 .head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
   font-size: 11px;
   text-transform: uppercase;
   letter-spacing: 0.05em;
