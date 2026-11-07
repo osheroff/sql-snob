@@ -107,6 +107,10 @@ export interface Section {
   detail?: string;
   /** Join type for `join` items (`LEFT JOIN`). */
   op?: string;
+  /** For FROM entries: the table name, or the name of the subquery's fold. */
+  target?: string;
+  /** For FROM entries that are subqueries: the subquery's fold. */
+  targetFold?: string;
   parent: number | null;
   /** Innermost fold the section is printed in (to reveal it). */
   fold: string | null;

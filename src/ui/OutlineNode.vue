@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed } from "vue";
-import { folds, isOpen, reveal, setFocus, state, toggle } from "../state/store";
+import { caretToFold, folds, setFocus, state } from "../state/store";
 
 const props = defineProps<{ id: string; depth: number; expanded: Set<string> }>();
 const emit = defineEmits<{ (e: "toggle", id: string): void }>();
@@ -11,8 +11,8 @@ const isExpanded = computed(() => props.expanded.has(props.id));
 const ICON: Record<string, string> = { cte: "W", derived: "F", subquery: "S", branch: "U", columns: "≡" };
 
 function onClick() {
-  reveal(props.id);
-  if (f.value.kind === "columns" && !isOpen(props.id)) toggle(props.id);
+  // Moving the cursor there keeps "This query" in sync with what you clicked.
+  caretToFold(props.id);
 }
 function onDbl() {
   setFocus(props.id);
@@ -25,7 +25,7 @@ function onDbl() {
       class="node"
       :class="{ focus: state.focus === id, cur: state.cursor === id }"
       :style="{ paddingLeft: depth * 12 + 4 + 'px' }"
-      :title="`${f.name} (${f.kind})\nClick: show · Double-click: focus`"
+      :title="`${f.name} (${f.kind})\nClick: go there · Double-click: focus`"
       @click="onClick"
       @dblclick="onDbl"
     >

@@ -715,6 +715,16 @@ class Printer {
     return out;
   }
 
+  /** Record what the current FROM/JOIN section points at (a table, or a subquery fold). */
+  private setTarget(target: string, fold?: string): void {
+    const top = this.secStack[this.secStack.length - 1];
+    const sec = top !== undefined ? this.sections[top] : undefined;
+    if (sec && (sec.kind === "source" || sec.kind === "join")) {
+      sec.target = target;
+      sec.targetFold = fold;
+    }
+  }
+
   /** One FROM/JOIN entry: printed, and registered as a source of the current SELECT. */
   private tableFactor(f: N, parent: N): Doc {
     if (f.type === "alias" && (isEntity(f.expr) || isSubSelect(f.expr))) {
@@ -723,9 +733,11 @@ class Printer {
       if (isEntity(e)) {
         head = this.tableName(e);
         this.addSource({ alias: f.alias.text, kind: "table", table: this.entityText(e) });
+        this.setTarget(this.entityText(e));
       } else {
         head = this.subquery(e, "derived", this.uniqueName(identName(f.alias) || "subquery"));
         this.addSource({ alias: f.alias.text, kind: "derived", fold: this.lastFold });
+        this.setTarget(this.folds[this.lastFold].name, this.lastFold);
       }
       return [
         this.comments(f),
@@ -739,11 +751,13 @@ class Printer {
     }
     if (isEntity(f)) {
       this.addSource({ alias: f.type === "member_expr" ? f.property.text : f.text, kind: "table", table: this.entityText(f) });
+      this.setTarget(this.entityText(f));
       return this.tableName(f);
     }
     if (f.type === "paren_expr" && isSubSelect(f)) {
       const doc = this.node(f, parent); // becomes a `subquery_N` fold
       this.addSource({ alias: this.folds[this.lastFold].name, kind: "derived", fold: this.lastFold });
+      this.setTarget(this.folds[this.lastFold].name, this.lastFold);
       return doc;
     }
     return this.node(f, parent);

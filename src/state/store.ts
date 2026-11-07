@@ -275,6 +275,13 @@ export function setFocus(id: string | null): void {
   state.focus = id;
   state.cursor = null;
   writeHash(true);
+  // Keep the cursor in view: if it's outside the new focus, put it at the focused query's start.
+  const at = state.caret?.f ?? null;
+  const inside = id === null || (at !== null && (at === id || ancestors(at).includes(id)));
+  if (!inside || !state.caret) {
+    if (id) caretToFold(id);
+    else setCaretAt(0, 0);
+  }
 }
 
 export function focusUp(): void {
@@ -471,6 +478,26 @@ function sectionStart(lay: LayoutResult, id: number): { line: number; col: numbe
     if (p && (!best || p.line < best.line || (p.line === best.line && p.col < best.col))) best = p;
   }
   return best;
+}
+
+/** The first query (SELECT) at or under a section: for a UNION, its first arm's. */
+export function firstQuery(id: number): number | null {
+  const secs = result.value?.sections;
+  if (!secs) return null;
+  const queue = [id];
+  while (queue.length) {
+    const s = queue.shift()!;
+    if (secs[s].kind === "query") return s;
+    queue.push(...sectionChildren(s));
+  }
+  return null;
+}
+
+/** Move the caret into a fold: to its first query, so "This query" shows that subquery. */
+export function caretToFold(foldId: string): void {
+  const sec = result.value?.sections.find((s) => s.fold === foldId);
+  if (!sec) return reveal(foldId);
+  caretToSection(sec.kind === "column" ? sec.id : (firstQuery(sec.id) ?? sec.id));
 }
 
 /** Move the caret to the start of a section, opening folds as needed. */

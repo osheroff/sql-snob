@@ -23,13 +23,13 @@ import Outline from "./Outline.vue";
   overflow: auto;
 }
 .outline-pane {
-  flex: 0 1 38%;
+  flex: 0 1 30%;
   height: auto;
   min-height: 90px;
   border-right: 0;
   border-bottom: 1px solid var(--border);
 }
 .context-pane {
-  flex: 1 1 62%;
+  flex: 1 1 70%;
 }
 </style>
