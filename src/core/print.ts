@@ -475,7 +475,7 @@ class Printer {
       case "func_call":
         return [
           n.name.type === "identifier" ? text(n.name.text, "fn") : this.node(n.name, n),
-          this.node(n.args, n),
+          this.huggedArgs(n.args) ?? this.node(n.args, n),
           n.filter ? [space, this.node(n.filter, n)] : [],
           n.over ? [space, this.node(n.over, n)] : [],
         ];
@@ -862,6 +862,27 @@ class Printer {
     const inner = n.expr;
     const body = inner.type === "list_expr" ? join([text(",", "op"), line], inner.items.map((x: N) => this.node(x, inner))) : this.node(inner, n);
     return group([text("(", "op"), indent([softline, body]), softline, text(")", "op")]);
+  }
+
+  /**
+   * `f(g(...), 'x')` hugs its first argument when that is itself a call and the rest are short
+   * atoms: `RTRIM(RTRIM(TO_CHAR(` stays on one line instead of a staircase.
+   */
+  private huggedArgs(args: N): Doc | null {
+    const fa = args?.type === "paren_expr" ? args.expr : null;
+    if (fa?.type !== "func_args" || fa.distinctKw || fa.orderBy || fa.limit || fa.nullHandlingKw) return null;
+    const items: N[] = fa.args?.type === "list_expr" ? fa.args.items : fa.args ? [fa.args] : [];
+    if (!items.length || items[0].type !== "func_call") return null;
+    const ATOMS = ["string_literal", "number_literal", "identifier", "parameter", "boolean_literal", "null_literal"];
+    const rest = items.slice(1);
+    if (!rest.every((x) => ATOMS.includes(x.type) && (x.text ?? "").length <= 30)) return null;
+    const list = fa.args.type === "list_expr" ? fa.args : fa;
+    return [
+      text("(", "op"),
+      this.node(items[0], list),
+      rest.map((x) => [text(",", "op"), space, this.node(x, list)]),
+      text(")", "op"),
+    ];
   }
 
   /** Children in source order, with the original punctuation between them (whitespace collapsed). */

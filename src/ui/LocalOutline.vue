@@ -1,13 +1,26 @@
 <script setup lang="ts">
 // Local outline: a navigation table of the query around the cursor. It mirrors the query's
 // structure (columns, tables, conditions, ...) without trying to repeat all of its text.
+// A UNION is an entity of its own: a list of its arms and their tables.
 import { computed, nextTick, ref, watch } from "vue";
 import type { Section, SectionKind } from "../core/model";
-import { caretToFold, caretToSection, firstQuery, localOutline, result, sectionChildren, state } from "../state/store";
+import {
+  caretToFold,
+  caretToSection,
+  copySectionText,
+  firstQuery,
+  localOutline,
+  result,
+  sectionChildren,
+  setFocus,
+  state,
+  toggleOutline,
+} from "../state/store";
 
 const el = ref<HTMLElement>();
 const secs = computed(() => result.value?.sections ?? []);
 const lo = computed(() => localOutline.value);
+const cur = computed(() => (lo.value ? secs.value[lo.value.query] : null));
 
 /** `"ROWS"` -> `ROWS`: quotes are noise in a navigation list. */
 function unquote(s: string): string {
@@ -46,52 +59,77 @@ function isSubquery(s: Section): boolean {
   return !!s.targetFold || s.kind === "cte";
 }
 
-/** Breadcrumb label of a query: an arm's name if it's a UNION arm. */
+/** Breadcrumb label: a UNION arm's name for an arm's query, the owner's name for a UNION. */
 function queryLabel(id: number): string {
   const s = secs.value[id];
+  if (s.kind === "union") {
+    const first = sectionChildren(id).map((a) => secs.value[a]).find((a) => a.kind === "arm");
+    return first ? first.label.replace(/#\d+$/, "") : s.label;
+  }
   const p = s.parent !== null ? secs.value[s.parent] : null;
   return p?.kind === "arm" ? p.label : s.label;
 }
 
-/** If the query is a UNION arm: its position, and its sibling arms. */
+// ---- UNION ------------------------------------------------------------------------
+
+/** If the query is a UNION arm: the UNION, its position, and its sibling arms. */
 const arm = computed(() => {
   const l = lo.value;
   if (!l) return null;
   const q = secs.value[l.query];
   const a = q.parent !== null ? secs.value[q.parent] : null;
   if (a?.kind !== "arm" || a.parent === null) return null;
-  const arms = sectionChildren(a.parent);
-  return { op: secs.value[a.parent].label, index: arms.indexOf(a.id), arms };
+  const arms = sectionChildren(a.parent).filter((x) => secs.value[x].kind === "arm");
+  return { union: a.parent, op: secs.value[a.parent].label, index: arms.indexOf(a.id), arms };
 });
 function gotoArm(i: number) {
   const a = arm.value;
   if (!a || a.arms[i] === undefined) return;
-  // Land inside the arm's query (the arm itself starts at its parenthesis, part of the outer query).
-  const stack = [a.arms[i]];
-  while (stack.length) {
-    const s = stack.shift()!;
-    if (secs.value[s].kind === "query") return caretToSection(s);
-    stack.push(...sectionChildren(s));
-  }
+  caretToSection(firstQuery(a.arms[i]) ?? a.arms[i]);
 }
+
+/** When the outline shows a UNION: one row per arm. */
+const unionArms = computed(() => {
+  const u = cur.value;
+  if (u?.kind !== "union") return [];
+  return sectionChildren(u.id)
+    .filter((a) => secs.value[a].kind === "arm")
+    .map((a, i) => ({ id: a, n: i + 1, q: firstQuery(a) }));
+});
+
+// ---- clauses ----------------------------------------------------------------------
 
 const clauses = computed(() => {
   const l = lo.value;
-  if (!l) return [];
+  if (!l || cur.value?.kind !== "query") return [];
   return sectionChildren(l.query).map((cid) => ({ c: secs.value[cid], items: sectionChildren(cid).map((i) => secs.value[i]) }));
 });
 
-/** Long item lists outside the current clause are cut short, unless expanded. */
-const LONG = 12;
-const SHORT = 6;
+/**
+ * Long lists are cut to the first few rows in every query you enter. Expanding one is remembered
+ * for that list (until a new SQL is loaded); other lists still start cut.
+ */
+const SHORT = 10;
 const expanded = ref(new Set<number>());
-function shown(clauseId: number, items: Section[]): Section[] {
-  if (items.length <= LONG || clauseId === lo.value?.clause || expanded.value.has(clauseId)) return items;
-  return items.slice(0, SHORT);
+watch(result, () => (expanded.value = new Set()));
+function setExpanded(id: number, on: boolean) {
+  const s = new Set(expanded.value);
+  if (on) s.add(id);
+  else s.delete(id);
+  expanded.value = s;
 }
-function expand(clauseId: number) {
-  expanded.value = new Set(expanded.value).add(clauseId);
+/**
+ * The rows to show when cut: a window of SHORT rows that scrolls to keep the row under the
+ * cursor in view, with the count of rows hidden above and below it.
+ */
+function shown(clauseId: number, items: Section[]): { rows: Section[]; above: number; below: number } {
+  if (items.length <= SHORT + 1 || expanded.value.has(clauseId)) return { rows: items, above: 0, below: 0 };
+  const at = items.findIndex((it) => it.id === lo.value?.item);
+  const start = Math.min(items.length - SHORT, at < SHORT ? 0 : at - SHORT + 2);
+  return { rows: items.slice(start, start + SHORT), above: start, below: items.length - start - SHORT };
 }
+
+// ---- actions ----------------------------------------------------------------------
 
 function go(id: number) {
   caretToSection(id);
@@ -101,6 +139,25 @@ function go(id: number) {
 function enter(it: Section) {
   if (it.targetFold) return caretToFold(it.targetFold);
   caretToSection(firstQuery(it.id) ?? it.id);
+}
+
+/** The fold that holds this query (null for the top-level query). */
+const ownFold = computed(() => cur.value?.fold ?? null);
+const canFocus = computed(() => !!ownFold.value && state.focus !== ownFold.value);
+function focus() {
+  if (ownFold.value) setFocus(ownFold.value);
+}
+function unfocus() {
+  setFocus(null);
+}
+
+const copied = ref(false);
+async function copyQuery() {
+  const l = lo.value;
+  if (!l) return;
+  await navigator.clipboard.writeText(copySectionText(l.query));
+  copied.value = true;
+  setTimeout(() => (copied.value = false), 1200);
 }
 function hover(id: number | null) {
   state.hoverSection = id;
@@ -119,17 +176,48 @@ watch(
 
 <template>
   <section ref="el" class="local">
+    <div class="bar">
+      <template v-if="lo">
+        <button class="act" :disabled="!canFocus" title="Show only this query in the SQL view" @click="focus">Focus</button>
+        <button class="act" :disabled="!state.focus" title="Show the whole SQL again" @click="unfocus">Unfocus</button>
+        <button class="act" title="Copy the SQL of this query, fully expanded" @click="copyQuery">{{ copied ? "Copied" : "Copy" }}</button>
+      </template>
+      <button class="hide" title="Hide sidebar (s)" @click="toggleOutline">«</button>
+    </div>
     <template v-if="lo">
       <div class="path">
         <template v-for="(q, i) in lo.path" :key="q">
           <span v-if="i > 0" class="sep">›</span>
-          <button class="crumb" :class="{ cur: q === lo.query }" @click="go(q)">{{ unquote(queryLabel(q)) }}</button>
+          <button class="crumb" :class="{ cur: q === lo.query, union: secs[q].kind === 'union' }" @click="go(q)">{{ unquote(queryLabel(q)) }}</button>
         </template>
       </div>
       <div v-if="arm" class="arm">
-        <span>{{ arm.op }} · arm {{ arm.index + 1 }} of {{ arm.arms.length }}</span>
+        <button class="arm-op" title="Show all the arms of this UNION" @click="go(arm.union)">{{ arm.op }}</button>
+        <span>arm {{ arm.index + 1 }} of {{ arm.arms.length }}</span>
         <button class="nav" :disabled="arm.index === 0" title="Previous arm" @click="gotoArm(arm.index - 1)">‹</button>
         <button class="nav" :disabled="arm.index === arm.arms.length - 1" title="Next arm" @click="gotoArm(arm.index + 1)">›</button>
+      </div>
+
+      <!-- A UNION: its arms, each with its tables. -->
+      <div v-if="cur?.kind === 'union'" class="clause cur">
+        <div class="heading" @click="go(cur.id)">
+          <span class="h">{{ cur.label }}</span>
+          <span class="count">{{ unionArms.length }}</span>
+        </div>
+        <div class="grid">
+          <div
+            v-for="a in unionArms"
+            :key="a.id"
+            class="row"
+            :class="{ cur: a.id === lo.clause }"
+            @click="go(a.id)"
+            @mouseenter="hover(a.id)"
+            @mouseleave="hover(null)"
+          >
+            <span class="text">arm #{{ a.n }}</span>
+            <button v-if="a.q !== null" class="into" title="Go into this arm" @click.stop="go(a.q)">›</button>
+          </div>
+        </div>
       </div>
 
       <div v-for="{ c, items } in clauses" :key="c.id" class="clause" :class="{ cur: c.id === lo.clause }">
@@ -140,24 +228,32 @@ watch(
         </div>
 
         <div v-if="items.length" class="grid" :class="c.kind">
-          <div
-            v-for="it in shown(c.id, items)"
-            :key="it.id"
-            class="row"
-            :class="{ cur: it.id === lo.item }"
-            :title="unquote(it.label)"
-            @click="go(it.id)"
-            @mouseenter="hover(it.id)"
-            @mouseleave="hover(null)"
-          >
-            <!-- TABLES: join type + alias -->
-            <span v-if="it.kind === 'source' || it.kind === 'join'" class="badge" :class="joinBadge(it)">{{ joinBadge(it) }}</span>
-            <span class="text">{{ it.kind === "cond" || it.kind === "item" ? it.label : mid(unquote(it.label), 44) }}</span>
-            <button v-if="isSubquery(it)" class="into" title="Go into this subquery" @click.stop="enter(it)">›</button>
-          </div>
-          <div v-if="shown(c.id, items).length < items.length" class="row more" @click="expand(c.id)">
-            <span class="text">… {{ items.length - SHORT }} more</span>
-          </div>
+          <template v-for="list in [shown(c.id, items)]" :key="c.id">
+            <div v-if="list.above" class="row more" :title="`${list.above} more · click to show all`" @click="setExpanded(c.id, true)">
+              <span class="text">▲ …</span>
+            </div>
+            <div
+              v-for="it in list.rows"
+              :key="it.id"
+              class="row"
+              :class="{ cur: it.id === lo.item }"
+              :title="unquote(it.label)"
+              @click="go(it.id)"
+              @mouseenter="hover(it.id)"
+              @mouseleave="hover(null)"
+            >
+              <!-- TABLES: join type + alias -->
+              <span v-if="it.kind === 'source' || it.kind === 'join'" class="badge" :class="joinBadge(it)">{{ joinBadge(it) }}</span>
+              <span class="text">{{ it.kind === "cond" || it.kind === "item" ? it.label : mid(unquote(it.label), 40) }}</span>
+              <button v-if="isSubquery(it)" class="into" title="Go into this subquery" @click.stop="enter(it)">›</button>
+            </div>
+            <div v-if="list.below" class="row more" :title="`${list.below} more · click to show all`" @click="setExpanded(c.id, true)">
+              <span class="text">▼ …</span>
+            </div>
+            <div v-if="!list.above && !list.below && expanded.has(c.id)" class="row more" title="Show fewer" @click="setExpanded(c.id, false)">
+              <span class="text">▴</span>
+            </div>
+          </template>
         </div>
       </div>
     </template>
@@ -183,6 +279,67 @@ watch(
   gap: 1px;
   font-family: var(--mono);
   padding: 0 0 6px;
+}
+.bar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 0 6px;
+}
+.act {
+  font-size: 11px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--fg);
+  border-radius: 3px;
+  padding: 1px 7px;
+  cursor: pointer;
+}
+.act:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+.act:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+.hide {
+  margin-left: auto;
+  border: 0;
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 14px;
+  padding: 0 4px;
+}
+.hide:hover {
+  color: var(--accent);
+}
+.crumb.union {
+  font-style: italic;
+}
+.arm-op {
+  border: 0;
+  background: none;
+  color: var(--accent);
+  cursor: pointer;
+  font: inherit;
+  padding: 0;
+}
+.arm-op:hover {
+  text-decoration: underline;
+}
+.row.more .text {
+  color: var(--accent);
+  font-family: var(--sans);
+}
+.row.more .text {
+  font-size: 11px;
+}
+.row.more .text {
+  color: var(--muted);
+}
+.row.more:hover .text {
+  color: var(--accent);
 }
 .crumb {
   border: 0;
@@ -212,6 +369,9 @@ watch(
 }
 .arm span {
   margin-right: auto;
+}
+.arm .arm-op + span {
+  margin-left: 4px;
 }
 .nav {
   border: 1px solid var(--border);
@@ -303,10 +463,6 @@ watch(
 .into:hover {
   border-color: var(--accent);
   color: var(--fg);
-}
-.row.more .text {
-  color: var(--accent);
-  font-family: var(--sans);
 }
 .badge {
   flex: 0 0 auto;

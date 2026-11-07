@@ -195,6 +195,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
           <dt>⌘/Ctrl-click chip</dt><dd>Focus</dd>
           <dt>Gutter ▾ / ⤢</dt><dd>Collapse / focus an open fold</dd>
           <dt>Outline</dt><dd>Click to show, double-click to focus</dd>
+          <dt>Focus / Unfocus</dt><dd>Show only the query in the sidebar / everything</dd>
           <dt>Local outline</dt><dd>Click a row to move the cursor there · › to go into a subquery</dd>
         </dl>
       </div>
@@ -205,7 +206,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
 <style scoped>
 .app {
   display: grid;
-  grid-template-columns: 400px minmax(0, 1fr);
+  grid-template-columns: 300px minmax(0, 1fr);
   grid-template-rows: auto minmax(0, 1fr) auto;
   grid-template-areas:
     "top top"

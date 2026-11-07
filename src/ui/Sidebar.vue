@@ -5,8 +5,8 @@ import Outline from "./Outline.vue";
 
 <template>
   <aside class="sidebar">
-    <Outline class="pane outline-pane" />
     <LocalOutline class="pane context-pane" />
+    <Outline class="pane outline-pane" />
   </aside>
 </template>
 
@@ -23,13 +23,11 @@ import Outline from "./Outline.vue";
   overflow: auto;
 }
 .outline-pane {
-  flex: 0 1 30%;
-  height: auto;
-  min-height: 90px;
-  border-right: 0;
-  border-bottom: 1px solid var(--border);
+  flex: 0 0 auto;
+  max-height: 45%;
+  border-top: 1px solid var(--border);
 }
 .context-pane {
-  flex: 1 1 70%;
+  flex: 1 1 auto;
 }
 </style>

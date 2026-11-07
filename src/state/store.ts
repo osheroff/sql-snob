@@ -70,6 +70,8 @@ export const state = reactive({
   viewLines: 30,
   /** Sidebar (outline + context) expanded; remembered per browser. */
   outlineOpen: readOutlinePref(),
+  /** An entity (a UNION) the local outline shows instead of the query under the caret, until the caret moves. */
+  viewSection: null as number | null,
   /** Keyboard cursor: a fold id. */
   cursor: null as string | null,
   /** A fold or tag the main view should scroll to after the next layout. */
@@ -334,6 +336,7 @@ export function setCaretAt(line: number, col: number, keepGoal = false): void {
   line = Math.max(0, Math.min(line, lay.lines.length - 1));
   const l = lay.lines[line];
   col = Math.max(l.tokens.length ? l.indent : 0, Math.min(col, lineWidth(l)));
+  state.viewSection = null;
   const goal = keepGoal && state.caret ? state.caret.goal : col;
   let { i } = tokenAt(l, col);
   if (i < 0 && l.tokens.length) i = l.tokens.length - 1; // end of line: anchor after the last token
@@ -417,7 +420,7 @@ export const caretSection = computed<number | null>(() => {
 });
 
 export interface LocalOutline {
-  /** The innermost query around the caret. */
+  /** The innermost entity around the caret: a query, or a UNION of queries. */
   query: number;
   /** The clause of that query the caret is in (SELECT, FROM, ...), and the item within it. */
   clause: number | null;
@@ -433,7 +436,9 @@ export const localOutline = computed<LocalOutline | null>(() => {
   const secs = r.sections;
   const chain: number[] = [];
   for (let s: number | null = caretSection.value; s !== null; s = secs[s].parent) chain.push(s);
-  let qi = chain.findIndex((s) => secs[s].kind === "query");
+  const isEntity = (s: number) => secs[s].kind === "query" || secs[s].kind === "union";
+  let qi = state.viewSection !== null ? chain.indexOf(state.viewSection) : -1;
+  if (qi < 0) qi = chain.findIndex(isEntity);
   if (qi < 0) {
     // No caret (or outside any query): the query of the current focus, else the top-level one.
     const q = secs.find((x) => x.kind === "query" && x.fold === state.focus) ?? secs.find((x) => x.kind === "query");
@@ -446,7 +451,7 @@ export const localOutline = computed<LocalOutline | null>(() => {
     query: chain[qi],
     clause: qi >= 1 ? chain[qi - 1] : null,
     item: qi >= 2 ? chain[qi - 2] : null,
-    path: chain.slice(qi).filter((s) => secs[s].kind === "query").reverse(),
+    path: chain.slice(qi).filter(isEntity).reverse(),
   };
 });
 
@@ -481,13 +486,14 @@ function sectionStart(lay: LayoutResult, id: number): { line: number; col: numbe
 }
 
 /** The first query (SELECT) at or under a section: for a UNION, its first arm's. */
+/** The first query (or UNION of queries) in a section. */
 export function firstQuery(id: number): number | null {
   const secs = result.value?.sections;
   if (!secs) return null;
   const queue = [id];
   while (queue.length) {
     const s = queue.shift()!;
-    if (secs[s].kind === "query") return s;
+    if (secs[s].kind === "query" || secs[s].kind === "union") return s;
     queue.push(...sectionChildren(s));
   }
   return null;
@@ -512,6 +518,8 @@ export function caretToSection(id: number): void {
   const lay = mainLayout.value;
   const at = lay && sectionStart(lay, id);
   if (at) setCaretAt(at.line, at.col);
+  // A UNION starts where its first arm does: pin the outline to the UNION itself.
+  if (sec.kind === "union") state.viewSection = id;
 }
 
 // ---- URL hash: #f=<focus>&c=<collapsed,...> -------------------------------------
@@ -543,3 +551,37 @@ export function applyHash(initial = false): void {
 window.addEventListener("popstate", () => {
   if (state.status === "ready") applyHash();
 });
+
+/** Formatted SQL of one section (e.g. a subquery), fully expanded and dedented. */
+export function copySectionText(id: number): string {
+  const r = result.value;
+  if (!r) return "";
+  const sec = r.sections[id];
+  const root = sec.fold ? focusDoc(sec.fold) : r.doc;
+  const lay = layout(root, { width: state.width, isOpen: () => true, label }, sec.fold ?? null);
+  const tags = sectionTags(id);
+  // A section is contiguous in the output: take everything from its first token to its last.
+  const inSec = (t: Token) => !!t.tag && tags.has(t.tag);
+  let first = -1;
+  let last = -1;
+  lay.lines.forEach((l, i) => {
+    if (l.tokens.some(inSec)) {
+      if (first < 0) first = i;
+      last = i;
+    }
+  });
+  const rows: { col: number; s: string }[] = [];
+  for (let i = first; first >= 0 && i <= last; i++) {
+    const toks = lay.lines[i].tokens;
+    let from = 0;
+    let to = toks.length;
+    if (i === first) from = toks.findIndex(inSec);
+    if (i === last) to = toks.length - [...toks].reverse().findIndex(inSec);
+    let col = lay.lines[i].indent;
+    for (let j = 0; j < from; j++) col += toks[j].s.length;
+    rows.push({ col, s: toks.slice(from, to).map((t) => t.s).join("").trimEnd() });
+  }
+  if (!rows.length) return "";
+  const min = Math.min(...rows.slice(1).map((r) => r.col), Infinity);
+  return rows.map((r, i) => (i === 0 ? r.s.trimStart() : " ".repeat(Math.max(0, r.col - min)) + r.s)).join("\n");
+}
