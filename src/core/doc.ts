@@ -7,6 +7,8 @@ export interface Text {
   t: "s";
   s: string;
   k: Kind;
+  /** Ref index (what this token means, for the context pane). */
+  r?: number;
 }
 /** m: 0 = line (space when flat), 1 = softline (nothing when flat), 2 = hardline */
 export interface Line {

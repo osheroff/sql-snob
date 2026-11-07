@@ -41,7 +41,7 @@ function toggle(id: string) {
   <nav class="outline">
     <div class="head">
       <span>Outline</span>
-      <button class="collapse" title="Collapse outline (s)" @click="toggleOutline">«</button>
+      <button class="collapse" title="Collapse sidebar (s)" @click="toggleOutline">«</button>
     </div>
     <ul v-if="result?.roots.length">
       <OutlineNode v-for="id in result.roots" :id="id" :key="id" :depth="0" :expanded="expanded" @toggle="toggle" />

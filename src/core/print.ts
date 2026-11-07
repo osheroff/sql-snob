@@ -20,14 +20,21 @@ import {
   tag,
   text,
 } from "./doc";
-import type {
-  ColumnItem,
-  ColumnKind,
-  ColumnList,
-  FoldInfo,
-  FoldKind,
-  PrintOptions,
-  PrintResult,
+import {
+  nameKey,
+  type ColumnItem,
+  type ColumnKind,
+  type ColumnList,
+  type FoldInfo,
+  type FoldKind,
+  type PrintOptions,
+  type PrintResult,
+  type Ref,
+  type RefKind,
+  type Scope,
+  type Section,
+  type SectionKind,
+  type Source,
 } from "./model";
 
 // The CST is a big discriminated union; this file walks it structurally, so it uses a loose type.
@@ -132,14 +139,52 @@ const FOLD_ID_PREFIX: Record<FoldKind, string> = { cte: "q", derived: "d", subqu
 
 const COMMENT_RE = /--[^\n]*|\/\*[\s\S]*?\*\//g;
 
+const CLAUSE_KIND: Record<string, SectionKind> = {
+  with_clause: "with",
+  select_clause: "select",
+  from_clause: "from",
+  where_clause: "where",
+  having_clause: "having",
+  qualify_clause: "qualify",
+  group_by_clause: "groupby",
+  order_by_clause: "orderby",
+  limit_clause: "limit",
+  offset_clause: "limit",
+  fetch_clause: "limit",
+};
+const CLAUSE_LABEL: Partial<Record<SectionKind, string>> = {
+  with: "WITH",
+  select: "SELECT",
+  from: "FROM",
+  where: "WHERE",
+  having: "HAVING",
+  qualify: "QUALIFY",
+  groupby: "GROUP BY",
+  orderby: "ORDER BY",
+};
+
 class Printer {
   folds: Record<string, FoldInfo> = {};
   roots: string[] = [];
   columns: Record<string, ColumnList> = {};
   rootColumns: string | undefined;
 
+  sections: Section[] = [];
+  scopes: Scope[] = [];
+  refs: Ref[] = [];
+  ctes: Record<string, string> = {};
+
   /** > 0 while printing a data type, where identifiers are type names, not column/table names. */
   private typeDepth = 0;
+  private scopeStack: number[] = [];
+  private secStack: number[] = [];
+  /** Output-list collector handed to the next SELECT printed (a subquery body or UNION arm). */
+  private pendingOutputs: string[] | null = null;
+  private scopeOutputs = new Map<number, string[] | null>();
+  /** Id of the fold most recently created by `subquery()`. */
+  private lastFold = "";
+  /** Index of the ref most recently created by `ident()`. */
+  private lastRef = -1;
 
   private stack: string[] = [];
   private usedNames = new Set<string>();
@@ -200,12 +245,101 @@ class Printer {
     this.stack.pop();
   }
 
-  /** `( <fold> )` around a subquery. `name` must already be unique. */
-  private subquery(paren: N, kind: FoldKind, name: string): Doc {
+  /**
+   * `( <fold> )` around a subquery. `name` must already be unique. `outputs` collects the SELECT
+   * lists defining the subquery's columns; a UNION arm passes its parent's collector.
+   */
+  private subquery(paren: N, kind: FoldKind, name: string, outputs?: string[]): Doc {
     const f = this.begin(kind, name, paren.range);
+    const outs = outputs ?? [];
+    this.pendingOutputs = outs;
     const body = this.node(unwrapParens(paren));
+    this.pendingOutputs = null;
+    if (!outputs) f.outputs = outs;
     this.end();
+    this.lastFold = f.id;
     return [this.comments(paren), text("(", "op"), fold(f.id, group([indent([softline, body]), softline]), body), text(")", "op")];
+  }
+
+  // ---- sections (query structure) --------------------------------------------
+
+  /** Print `fn()` as a section: a tagged region of the doc, nested in the current section. */
+  private sec(kind: SectionKind, label: string, fn: () => Doc, more: Partial<Section> = {}): Doc {
+    const id = this.sections.length;
+    const parent = this.secStack.length ? this.secStack[this.secStack.length - 1] : null;
+    this.sections.push({ id, kind, label, parent, fold: this.current, ...more });
+    this.secStack.push(id);
+    const doc = fn();
+    this.secStack.pop();
+    return tag(`S${id}`, doc);
+  }
+
+  /** One-line source text of a node, for outline labels. */
+  private snippet(n: N, max = 140): string {
+    const s = this.src.slice(n.range[0], n.range[1]).replace(COMMENT_RE, " ").replace(/\s+/g, " ").trim();
+    return s.length > max ? s.slice(0, max) + " …" : s;
+  }
+
+  private clause(c: N, parent: N): Doc {
+    const kind = CLAUSE_KIND[c.type] ?? "clause";
+    const label = CLAUSE_LABEL[kind] ?? this.snippet(c, 40);
+    const detail = kind === "limit" || kind === "clause" ? this.snippet(c) : undefined;
+    return this.sec(kind, label, () => this.node(c, parent), { detail });
+  }
+
+  /** WHERE / HAVING / QUALIFY: each AND-ed condition is an item. */
+  private conditions(e: N, parent: N): Doc {
+    if (e.type !== "binary_expr" || opName(e.operator) !== "AND") {
+      return this.sec("cond", this.snippet(e), () => this.node(e, parent));
+    }
+    const items: N[] = [];
+    const ops: N[] = [];
+    const pre: Doc[] = [];
+    const walk = (x: N) => {
+      if (x.type === "binary_expr" && opName(x.operator) === "AND") {
+        pre.push(this.comments(x));
+        walk(x.left);
+        ops.push(x.operator);
+        walk(x.right);
+      } else items.push(x);
+    };
+    walk(e);
+    const docs = items.map((it) => this.sec("cond", this.snippet(it), () => this.node(it, e)));
+    return group([pre, docs[0], indent(docs.slice(1).map((d, i) => [line, this.kw(ops[i]), space, d]))]);
+  }
+
+  // ---- scopes & refs --------------------------------------------------------
+
+  private get scope(): number {
+    return this.scopeStack.length ? this.scopeStack[this.scopeStack.length - 1] : -1;
+  }
+
+  private ref(r: Omit<Ref, "scope">): number {
+    this.refs.push({ ...r, scope: this.scope });
+    return this.refs.length - 1;
+  }
+
+  /** An identifier token that means something (see RefKind). */
+  private ident(n: N, kind: RefKind, extra: Partial<Ref> = {}): Doc {
+    this.lastRef = this.ref({ kind, name: n.text, ...extra });
+    return [this.comments(n), { t: "s", s: n.text, k: "id", r: this.lastRef }, this.comments(n, "trailing")];
+  }
+
+  private addSource(src: Omit<Source, "key">): void {
+    if (this.scope >= 0) this.scopes[this.scope].sources.push({ ...src, key: nameKey(src.alias) });
+  }
+
+  private selectStmt(n: N): Doc {
+    const id = this.scopes.length;
+    const cur = this.current;
+    this.scopes.push({ id, parent: this.scope >= 0 ? this.scope : null, fold: cur, sources: [] });
+    if (cur && this.folds[cur].scope === undefined) this.folds[cur].scope = id;
+    this.scopeOutputs.set(id, this.pendingOutputs);
+    this.pendingOutputs = null; // nested SELECTs don't define this query's outputs
+    this.scopeStack.push(id);
+    const doc = this.sec("query", this.currentName, () => join(hardline, n.clauses.map((c: N) => this.clause(c, n))));
+    this.scopeStack.pop();
+    return doc;
   }
 
   // ---- comments -------------------------------------------------------------
@@ -257,7 +391,20 @@ class Printer {
       case "identifier":
         // Type names (`::TEXT`, `MAP(VARCHAR, VARIANT)`) parse as identifiers; color them as syntax.
         if (this.typeDepth > 0) return text(n.text, "kw");
-        return text(n.text, "id");
+        return { t: "s", s: n.text, k: "id", r: this.ref({ kind: "column", name: n.text }) };
+      case "member_expr":
+        // `t.col` / `t.*`: the qualifier and the column are separately clickable.
+        if (
+          this.typeDepth === 0 &&
+          n.object.type === "identifier" &&
+          (n.property.type === "identifier" || n.property.type === "all_columns")
+        ) {
+          const q = n.object;
+          const qDoc = this.ident(q, "qualifier");
+          if (n.property.type === "all_columns") return [qDoc, text(".", "op"), text("*", "op")];
+          return [qDoc, text(".", "op"), this.ident(n.property, "column", { qualifier: q.text })];
+        }
+        return this.generic(n);
       case "parameter":
       case "variable":
         return text(n.text, "param");
@@ -269,14 +416,20 @@ class Printer {
         return text(n.text, "num");
 
       case "select_stmt":
-        return join(hardline, n.clauses.map((c: N) => this.node(c, n)));
+        return this.selectStmt(n);
       case "compound_select_stmt":
-        return this.compound(n);
+        return this.sec("union", opName(n.operator), () => this.compound(n));
       case "with_clause":
         return [
           this.kw(n.withKw),
           n.recursiveKw ? [space, this.kw(n.recursiveKw)] : [],
-          indent([hardline, join([text(",", "op"), hardline], n.tables.items.map((t: N) => this.node(t, n)))]),
+          indent([
+            hardline,
+            join(
+              [text(",", "op"), hardline],
+              n.tables.items.map((t: N) => this.sec("cte", identName(t.table) || "cte", () => this.node(t, n))),
+            ),
+          ]),
         ];
       case "common_table_expr":
         return this.cte(n);
@@ -290,12 +443,12 @@ class Printer {
       case "having_clause":
       case "qualify_clause": {
         const kwNode = n.whereKw ?? n.havingKw ?? n.qualifyKw;
-        return [this.kw(kwNode), space, this.node(n.expr, n)];
+        return [this.kw(kwNode), space, this.conditions(n.expr, n)];
       }
       case "group_by_clause":
-        return this.listClause([this.kw(n.groupByKw), n.distinctKw ? [space, this.kw(n.distinctKw)] : []], n.columns, n);
+        return this.listClause([this.kw(n.groupByKw), n.distinctKw ? [space, this.kw(n.distinctKw)] : []], n.columns, n, true);
       case "order_by_clause":
-        return this.listClause(this.kw(n.orderByKw), n.specifications, n);
+        return this.listClause(this.kw(n.orderByKw), n.specifications, n, parent?.type === "select_stmt");
       case "partition_by_clause":
         return this.listClause(this.kw(n.partitionByKw), n.specifications, n);
       case "join_on_specification":
@@ -366,14 +519,19 @@ class Printer {
 
   private cte(n: N): Doc {
     const name = this.uniqueName(identName(n.table) || "cte");
+    const nameDoc = this.ident(n.table, "cte");
+    const nameRef = this.lastRef;
+    const body = this.subquery(n.expr, "cte", name);
+    this.refs[nameRef].fold = this.lastFold;
+    this.ctes[nameKey(n.table.text)] = this.lastFold;
     return [
-      this.node(n.table, n),
+      nameDoc,
       n.columns ? this.node(n.columns, n) : [],
       space,
       this.kw(n.asKw),
       n.materializedKw ? [space, this.kw(n.materializedKw)] : [],
       space,
-      this.subquery(n.expr, "cte", name),
+      body,
       n.search ? [space, this.node(n.search, n)] : [],
       n.cycle ? [space, this.node(n.cycle, n)] : [],
     ];
@@ -397,22 +555,33 @@ class Printer {
     };
     walk(n);
     const owner = this.currentName;
+    const target = this.pendingOutputs; // each arm contributes one output list
+    this.pendingOutputs = null;
     const out: Doc[] = [pre];
     branches.forEach((b, i) => {
       if (i > 0) out.push(hardline, this.kw(ops[i - 1]), hardline);
       const big = b.range[1] - b.range[0] >= SMALL_FOLD;
-      if (!big) {
-        out.push(this.node(b, n));
-      } else if (b.type === "paren_expr") {
-        out.push(this.subquery(b, "branch", this.uniqueName(`${owner}#${i + 1}`)));
-      } else {
-        const f = this.begin("branch", this.uniqueName(`${owner}#${i + 1}`), b.range);
-        const body = this.node(b, n);
-        this.end();
-        out.push(fold(f.id, body, body));
-      }
+      const armName = `${owner}#${i + 1}`;
+      this.pendingOutputs = target;
+      out.push(
+        this.sec("arm", armName, (): Doc => {
+          if (!big) return b.type === "paren_expr" && isSubSelect(b) ? this.parenArm(b) : this.node(b, n);
+          if (b.type === "paren_expr") return this.subquery(b, "branch", this.uniqueName(armName), target ?? undefined);
+          const f = this.begin("branch", this.uniqueName(armName), b.range);
+          const body = this.node(b, n);
+          this.end();
+          return fold(f.id, body, body);
+        }),
+      );
+      this.pendingOutputs = null;
     });
     return out;
+  }
+
+  /** A small parenthesized UNION arm: printed inline (no fold), still contributing its outputs. */
+  private parenArm(b: N): Doc {
+    const body = this.node(unwrapParens(b));
+    return group([text("(", "op"), indent([softline, body]), softline, text(")", "op")]);
   }
 
   // ---- SELECT list ----------------------------------------------------------
@@ -431,11 +600,22 @@ class Printer {
     const f = long ? this.begin("columns", this.uniqueName(`${this.currentName}.columns`), n.columns.range) : null;
     if (f) f.count = items.length;
 
-    const list: ColumnList = { id: listId, owner, foldId: f?.id, items: [] };
+    const sc = this.scope;
+    if (sc >= 0 && this.scopes[sc].list === undefined) {
+      this.scopes[sc].list = listId;
+      this.scopeOutputs.get(sc)?.push(listId);
+    }
+    const list: ColumnList = { id: listId, owner, foldId: f?.id, items: [], scope: sc };
     const docs = items.map((it, i) => {
-      const { doc, item } = this.column(it, i, listId, n.columns);
-      list.items.push(item);
-      return tag(item.tag, doc);
+      const id = this.sections.length;
+      return this.sec("column", "", () => {
+        const { doc, item } = this.column(it, i, listId, n.columns);
+        item.tag = `S${id}`;
+        this.sections[id].label = item.outputName;
+        this.sections[id].detail = this.snippet(it.type === "alias" ? it.expr : it);
+        list.items.push(item);
+        return doc;
+      });
     });
     this.columns[listId] = list;
 
@@ -450,8 +630,10 @@ class Printer {
     const pre = it.type === "alias" ? this.comments(it) : [];
     const expr = it.type === "alias" ? it.expr : it;
     const alias = it.type === "alias" ? it.alias : null;
-    const outputName = alias ? identName(alias) : identName(expr) || (expr.type === "all_columns" ? "*" : `?col_${index + 1}`);
+    const star = expr.type === "all_columns" || (expr.type === "member_expr" && expr.property?.type === "all_columns");
+    const outputName = alias ? identName(alias) : star ? "*" : identName(expr) || `?col_${index + 1}`;
 
+    const refsBefore = this.refs.length;
     let exprDoc: Doc;
     if (isSubSelect(expr) && expr.type === "paren_expr") {
       const name = alias ? this.uniqueName(identName(alias)) : this.numberedName("scalar");
@@ -463,14 +645,38 @@ class Printer {
     const same = alias && (expr.type === "identifier" || expr.type === "member_expr") && identText(expr) === alias.text;
     let doc: Doc = exprDoc;
     if (alias && !(same && this.opts.collapseAliases)) {
-      doc = [exprDoc, space, it.asKw ? [this.kw(it.asKw), space] : [], this.node(alias, it), it.columnAliases ? this.node(it.columnAliases, it) : []];
+      doc = [
+        exprDoc,
+        space,
+        it.asKw ? [this.kw(it.asKw), space] : [],
+        this.ident(alias, "output", { listId, index }),
+        it.columnAliases ? this.node(it.columnAliases, it) : [],
+      ];
     }
+    // A plain column reference (through casts/parens) can be traced further down; a computed
+    // expression lists the columns it reads instead. Refs inside nested subqueries don't count.
+    let ref: number | undefined;
+    const inputs: number[] = [];
+    const seen = new Set<string>();
+    const sc = this.scope;
+    for (let i = refsBefore; i < this.refs.length; i++) {
+      const x = this.refs[i];
+      if (x.kind !== "column" || x.scope !== sc) continue;
+      const k = `${x.qualifier ? nameKey(x.qualifier) + "." : ""}${nameKey(x.name)}`;
+      if (!seen.has(k)) {
+        seen.add(k);
+        inputs.push(i);
+      }
+    }
+    if (isColumnRef(stripCasts(expr)) && inputs.length) ref = inputs[0];
     const item: ColumnItem = {
       index,
       outputName,
       kind: classify(expr, alias, !!same),
       expr: exprDoc,
       tag: `${listId}:${index}`,
+      ref,
+      inputs: ref === undefined && inputs.length ? inputs : undefined,
     };
     return { doc: [pre, doc], item };
   }
@@ -478,29 +684,85 @@ class Printer {
   // ---- FROM / JOIN ----------------------------------------------------------
 
   private tableExpr(e: N, parent: N): Doc {
-    if (e.type !== "join_expr") return this.node(e, parent);
+    if (e.type !== "join_expr") return this.sec("source", this.factorName(e), () => this.tableFactor(e, parent), { detail: this.snippet(e) });
     const joins: N[] = [];
     let cur = e;
     while (cur.type === "join_expr") {
       joins.unshift(cur);
       cur = cur.left;
     }
-    const out: Doc[] = [joins.map((j) => this.comments(j)), this.node(cur, e)];
+    const out: Doc[] = [
+      joins.map((j) => this.comments(j)),
+      this.sec("source", this.factorName(cur), () => this.tableFactor(cur, e), { detail: this.snippet(cur) }),
+    ];
     for (const j of joins) {
+      const spec = j.specification;
+      const more = { op: j.operator === "," ? "," : opName(j.operator), detail: spec ? this.snippet(spec) : undefined };
       if (j.operator === ",") {
-        out.push(text(",", "op"), hardline, this.node(j.right, j));
+        out.push(text(",", "op"), hardline, this.sec("join", this.factorName(j.right), () => this.tableFactor(j.right, j), more));
         continue;
       }
-      const spec = j.specification;
       out.push(
         hardline,
-        this.kw(j.operator),
-        space,
-        this.node(j.right, j),
-        spec ? group(indent([line, this.node(spec, j)])) : [],
+        this.sec(
+          "join",
+          this.factorName(j.right),
+          (): Doc => [this.kw(j.operator), space, this.tableFactor(j.right, j), spec ? group(indent([line, this.node(spec, j)])) : []],
+          more,
+        ),
       );
     }
     return out;
+  }
+
+  /** One FROM/JOIN entry: printed, and registered as a source of the current SELECT. */
+  private tableFactor(f: N, parent: N): Doc {
+    if (f.type === "alias" && (isEntity(f.expr) || isSubSelect(f.expr))) {
+      const e = f.expr;
+      let head: Doc;
+      if (isEntity(e)) {
+        head = this.tableName(e);
+        this.addSource({ alias: f.alias.text, kind: "table", table: this.entityText(e) });
+      } else {
+        head = this.subquery(e, "derived", this.uniqueName(identName(f.alias) || "subquery"));
+        this.addSource({ alias: f.alias.text, kind: "derived", fold: this.lastFold });
+      }
+      return [
+        this.comments(f),
+        head,
+        space,
+        f.asKw ? [this.kw(f.asKw), space] : [],
+        this.ident(f.alias, "alias"),
+        f.columnAliases ? this.node(f.columnAliases, f) : [],
+        this.comments(f, "trailing"),
+      ];
+    }
+    if (isEntity(f)) {
+      this.addSource({ alias: f.type === "member_expr" ? f.property.text : f.text, kind: "table", table: this.entityText(f) });
+      return this.tableName(f);
+    }
+    if (f.type === "paren_expr" && isSubSelect(f)) {
+      const doc = this.node(f, parent); // becomes a `subquery_N` fold
+      this.addSource({ alias: this.folds[this.lastFold].name, kind: "derived", fold: this.lastFold });
+      return doc;
+    }
+    return this.node(f, parent);
+  }
+
+  /** Outline label of a FROM entry: its alias, else its table name. */
+  private factorName(f: N): string {
+    if (f.type === "alias") return f.alias.text;
+    if (isEntity(f)) return this.entityText(f);
+    return this.snippet(f, 40);
+  }
+
+  private entityText(e: N): string {
+    return this.src.slice(e.range[0], e.range[1]).replace(/\s+/g, "");
+  }
+
+  private tableName(e: N): Doc {
+    const t = this.entityText(e);
+    return [this.comments(e), { t: "s", s: t, k: "id", r: this.ref({ kind: "table", name: t }) }, this.comments(e, "trailing")];
   }
 
   private alias(n: N): Doc {
@@ -510,7 +772,7 @@ class Printer {
         this.subquery(n.expr, "derived", name),
         space,
         n.asKw ? [this.kw(n.asKw), space] : [],
-        this.node(n.alias, n),
+        this.ident(n.alias, "alias"),
         n.columnAliases ? this.node(n.columnAliases, n) : [],
       ];
     }
@@ -518,13 +780,14 @@ class Printer {
       this.node(n.expr, n),
       space,
       n.asKw ? [this.kw(n.asKw), space] : [],
-      this.node(n.alias, n),
+      this.ident(n.alias, "alias"),
       n.columnAliases ? this.node(n.columnAliases, n) : [],
     ];
   }
 
-  private listClause(head: Doc, list: N, n: N): Doc {
-    return group([head, indent([line, join([text(",", "op"), line], list.items.map((x: N) => this.node(x, n)))])]);
+  private listClause(head: Doc, list: N, n: N, items = false): Doc {
+    const docs = list.items.map((x: N) => (items ? this.sec("item", this.snippet(x), () => this.node(x, n)) : this.node(x, n)));
+    return group([head, indent([line, join([text(",", "op"), line], docs)])]);
   }
 
   // ---- expressions ----------------------------------------------------------
@@ -628,6 +891,28 @@ function collectChildren(v: N, out: N[]): void {
   }
 }
 
+/** A table name: `t`, `schema.t`, `db.schema.t`. */
+function isEntity(e: N): boolean {
+  if (e.type === "identifier") return true;
+  return e.type === "member_expr" && e.property?.type === "identifier" && isEntity(e.object);
+}
+
+function stripCasts(e: N): N {
+  for (;;) {
+    if (e.type === "paren_expr") e = e.expr;
+    else if (e.type === "cast_operator_expr") e = e.left;
+    else if (e.type === "cast_expr" && e.args?.expr?.type === "cast_arg") e = e.args.expr.expr;
+    else return e;
+  }
+}
+
+function isColumnRef(e: N): boolean {
+  return (
+    e.type === "identifier" ||
+    (e.type === "member_expr" && e.object.type === "identifier" && e.property.type === "identifier")
+  );
+}
+
 function identText(n: N): string {
   if (n.type === "identifier") return n.text;
   if (n.type === "member_expr" && n.property?.type === "identifier") return n.property.text;
@@ -720,7 +1005,17 @@ function classify(expr: N, alias: N, sameName: boolean): ColumnKind {
 export function print(cst: Program, src: string, opts: PrintOptions): PrintResult {
   const p = new Printer(src, opts);
   const doc = p.node(cst);
-  return { doc, folds: p.folds, roots: p.roots, columns: p.columns, rootColumns: p.rootColumns };
+  return {
+    doc,
+    folds: p.folds,
+    roots: p.roots,
+    columns: p.columns,
+    rootColumns: p.rootColumns,
+    sections: p.sections,
+    scopes: p.scopes,
+    refs: p.refs,
+    ctes: p.ctes,
+  };
 }
 
 export type { Kind };

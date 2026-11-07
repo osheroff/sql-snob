@@ -13,6 +13,7 @@
   --hl: rgba(124, 147, 255, 0.25);
   --flash: rgba(250, 200, 50, 0.3);
   --cursor-bg: rgba(255, 255, 255, 0.05);
+  --cur-sec: rgba(255, 255, 255, 0.045);
   --shadow: rgba(0, 0, 0, 0.6);
   --scrim: rgba(0, 0, 0, 0.6);
   --err: #ff7b72;

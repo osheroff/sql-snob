@@ -1,21 +1,28 @@
-// App state: the loaded query, fold/focus/panel state, the worker client, and URL-hash sync.
+// App state: the loaded query, fold/focus/caret state, the worker client, and URL-hash sync.
 
 import { computed, markRaw, reactive, shallowRef } from "vue";
-import { eachFold, type Doc, type Fold } from "../core/doc";
-import { layout, toText, type LayoutResult } from "../core/layout";
-import { defaultPrintOptions, type FoldInfo, type ParseError, type PrintOptions, type PrintResult } from "../core/model";
+import { eachFold, type Doc, type Fold, type Text } from "../core/doc";
+import { layout, lineWidth, toText, tokenAt, tokenWidth, type LayoutResult, type Token } from "../core/layout";
+import {
+  defaultPrintOptions,
+  sectionTag,
+  type FoldInfo,
+  type ParseError,
+  type PrintOptions,
+  type PrintResult,
+} from "../core/model";
 import type { Request, Response } from "../worker/protocol";
 
 const SQL_KEY = "sql-snob:sql";
-const OUTLINE_KEY = "sql-snob:outline";
+const OUTLINE_KEY = "sql-snob:sidebar";
 /** Set while a query is being viewed, so a page reload goes back to the viewer, not the paste box. */
 const VIEWING_KEY = "sql-snob:viewing";
 
 function readOutlinePref(): boolean {
   try {
-    return localStorage.getItem(OUTLINE_KEY) === "open";
+    return localStorage.getItem(OUTLINE_KEY) !== "closed";
   } catch {
-    return false;
+    return true;
   }
 }
 
@@ -55,12 +62,13 @@ export const state = reactive({
   opts: { ...defaultPrintOptions } as PrintOptions,
   /** Fold id the main view is rooted at (null = whole query). */
   focus: null as string | null,
-  /** ColumnList id shown in the side panel (null = closed). */
-  panel: null as string | null,
-  /** Selected column (tag id) — highlighted in the main view and the panel. */
-  selectedTag: null as string | null,
-  hoverTag: null as string | null,
-  /** Outline sidebar expanded (collapsed to a rail by default; remembered per browser). */
+  /** The text cursor in the SQL. */
+  caret: null as Caret | null,
+  /** Section hovered in the local outline (highlighted in the SQL). */
+  hoverSection: null as number | null,
+  /** Lines visible in the code view (for PageUp/PageDown). */
+  viewLines: 30,
+  /** Sidebar (outline + context) expanded; remembered per browser. */
   outlineOpen: readOutlinePref(),
   /** Keyboard cursor: a fold id. */
   cursor: null as string | null,
@@ -70,13 +78,29 @@ export const state = reactive({
   ms: { parse: 0, print: 0 },
 });
 
+/**
+ * The cursor. `line`/`col` are where it was placed; the anchor (the doc node of the token it's
+ * in, or a fold chip, plus an offset) keeps it on the same text when the layout re-flows.
+ */
+export interface Caret {
+  line: number;
+  col: number;
+  src?: Text;
+  chip?: string;
+  off: number;
+  /** Innermost open fold of the anchor token, to fall back to its chip if it gets collapsed. */
+  f: string | null;
+  /** Column to aim for when moving up/down. */
+  goal: number;
+}
+
 export const result = shallowRef<PrintResult | null>(null);
 /** Open folds. Replaced (not mutated) on change so computeds update. */
 export const openSet = shallowRef<Set<string>>(new Set());
 
 let foldDocs = new Map<string, Fold>();
-/** columns-fold id -> ColumnList id */
-let listByFold = new Map<string, string>();
+/** Section id -> child section ids. */
+let sectionKids = new Map<number, number[]>();
 
 export const folds = computed<Record<string, FoldInfo>>(() => result.value?.folds ?? {});
 
@@ -110,9 +134,9 @@ export async function load(sql: string, restore = false): Promise<void> {
   const r = res.result;
   openSet.value = new Set(Object.keys(r.folds)); // start fully expanded
   state.focus = null;
-  state.panel = null;
-  state.selectedTag = null;
   state.cursor = null;
+  state.caret = null;
+  state.hoverSection = null;
   applyHash(true);
   state.status = "ready";
 }
@@ -127,8 +151,13 @@ function setResult(r: PrintResult, ms: { parse: number; print: number }) {
   state.ms = { parse: ms.parse || state.ms.parse, print: ms.print };
   foldDocs = new Map();
   eachFold(r.doc, (f) => foldDocs.set(f.id, f));
-  listByFold = new Map();
-  for (const l of Object.values(r.columns)) if (l.foldId) listByFold.set(l.foldId, l.id);
+  sectionKids = new Map();
+  for (const sec of r.sections) {
+    if (sec.parent === null) continue;
+    const k = sectionKids.get(sec.parent);
+    if (k) k.push(sec.id);
+    else sectionKids.set(sec.parent, [sec.id]);
+  }
   result.value = markRaw(r);
   state.error = null;
 }
@@ -164,7 +193,7 @@ export const mainLayout = computed<LayoutResult | null>(() => {
   if (!r) return null;
   const root = state.focus ? focusDoc(state.focus) : r.doc;
   const open = openSet.value;
-  return layout(root, { width: state.width, isOpen: (id) => open.has(id), label });
+  return layout(root, { width: state.width, isOpen: (id) => open.has(id), label }, state.focus);
 });
 
 function focusDoc(id: string): Doc {
@@ -245,11 +274,6 @@ export function setFocus(id: string | null): void {
   if (id === state.focus) return;
   state.focus = id;
   state.cursor = null;
-  // The panel follows the focus: show the focused query's SELECT list.
-  if (state.panel) {
-    const cols = id ? folds.value[id]?.columns : result.value?.rootColumns;
-    if (cols) state.panel = cols;
-  }
   writeHash(true);
 }
 
@@ -266,40 +290,209 @@ export function reveal(id: string): void {
   state.reveal = { id, kind: "fold" };
 }
 
-// ---- column panel ---------------------------------------------------------------
+// ---- caret ----------------------------------------------------------------------
 
-export function listForFold(foldId: string): string | undefined {
-  return listByFold.get(foldId);
+/** Where the caret is in the current layout (follows its anchor through re-layouts). */
+export const caretPos = computed<{ line: number; col: number } | null>(() => {
+  const c = state.caret;
+  const lay = mainLayout.value;
+  if (!c || !lay || !lay.lines.length) return null;
+  if (c.src || c.chip) {
+    // Find the anchor token; if its fold was collapsed, land on the chip of the nearest closed fold.
+    const chips = new Map<string, { line: number; col: number }>();
+    for (let n = 0; n < lay.lines.length; n++) {
+      const l = lay.lines[n];
+      let col = l.indent;
+      for (const t of l.tokens) {
+        if (c.src ? t.src === c.src : t.fold === c.chip && t.k === "fold") {
+          return { line: n, col: Math.max(l.indent, Math.min(col + c.off, lineWidth(l))) };
+        }
+        if (t.k === "fold" && t.fold) chips.set(t.fold, { line: n, col });
+        col += tokenWidth(t);
+      }
+    }
+    for (let f: string | null | undefined = c.f; f; f = folds.value[f]?.parent) {
+      const at = chips.get(f);
+      if (at) return at;
+    }
+  }
+  const line = Math.min(c.line, lay.lines.length - 1);
+  return { line, col: Math.min(c.col, lineWidth(lay.lines[line])) };
+});
+
+/** Put the caret at a layout position (clamped to the text). */
+export function setCaretAt(line: number, col: number, keepGoal = false): void {
+  const lay = mainLayout.value;
+  if (!lay || !lay.lines.length) return;
+  line = Math.max(0, Math.min(line, lay.lines.length - 1));
+  const l = lay.lines[line];
+  col = Math.max(l.tokens.length ? l.indent : 0, Math.min(col, lineWidth(l)));
+  const goal = keepGoal && state.caret ? state.caret.goal : col;
+  let { i } = tokenAt(l, col);
+  if (i < 0 && l.tokens.length) i = l.tokens.length - 1; // end of line: anchor after the last token
+  // Spaces and list commas are shared doc nodes, so they can't anchor: use the nearest real token
+  // (the offset may then point past its end, or before its start).
+  const shared = (x: Token) => x.s === "," || !x.s.trim();
+  if (i >= 0 && shared(l.tokens[i])) {
+    let j = i;
+    while (j >= 0 && shared(l.tokens[j])) j--;
+    if (j < 0) for (j = i; j < l.tokens.length && shared(l.tokens[j]); j++);
+    i = j < l.tokens.length ? j : -1;
+  }
+  let start = l.indent;
+  for (let k = 0; k < i; k++) start += tokenWidth(l.tokens[k]);
+  const t = i >= 0 ? l.tokens[i] : undefined;
+  state.caret = {
+    line,
+    col,
+    // Raw, so the reactive state doesn't wrap it in a proxy (the anchor is matched by identity).
+    src: t && t.k !== "fold" && t.src ? markRaw(t.src) : undefined,
+    chip: t && t.k === "fold" ? t.fold : undefined,
+    off: col - start,
+    f: t?.f ?? null,
+    goal,
+  };
 }
 
-export function openPanel(listId: string | null): void {
-  state.panel = listId;
-  state.selectedTag = null;
-  writeHash(true);
+export function moveCaret(how: "left" | "right" | "up" | "down" | "home" | "end" | "pageUp" | "pageDown" | "top" | "bottom"): void {
+  const lay = mainLayout.value;
+  const pos = caretPos.value;
+  if (!lay || !lay.lines.length) return;
+  if (!pos) return setCaretAt(0, 0);
+  const l = lay.lines[pos.line];
+  const page = Math.max(1, state.viewLines - 2);
+  switch (how) {
+    case "left":
+      if (pos.col > l.indent) return setCaretAt(pos.line, pos.col - 1);
+      if (pos.line > 0) return setCaretAt(pos.line - 1, Infinity);
+      return;
+    case "right":
+      if (pos.col < lineWidth(l)) return setCaretAt(pos.line, pos.col + 1);
+      if (pos.line < lay.lines.length - 1) return setCaretAt(pos.line + 1, 0);
+      return;
+    case "up":
+      return setCaretAt(pos.line - 1, state.caret!.goal, true);
+    case "down":
+      return setCaretAt(pos.line + 1, state.caret!.goal, true);
+    case "pageUp":
+      return setCaretAt(pos.line - page, state.caret!.goal, true);
+    case "pageDown":
+      return setCaretAt(pos.line + page, state.caret!.goal, true);
+    case "home":
+      return setCaretAt(pos.line, 0);
+    case "end":
+      return setCaretAt(pos.line, Infinity);
+    case "top":
+      return setCaretAt(0, 0);
+    case "bottom":
+      return setCaretAt(lay.lines.length - 1, Infinity);
+  }
 }
 
-/** Select a column: highlight it, and make it visible in the main view. */
-export function selectColumn(tagId: string): void {
-  state.selectedTag = tagId;
+/** The token the caret is on (or just after, at the end of a line). */
+export const caretToken = computed(() => {
+  const pos = caretPos.value;
+  const lay = mainLayout.value;
+  if (!pos || !lay) return null;
+  const l = lay.lines[pos.line];
+  if (!l?.tokens.length) return null;
+  let { i } = tokenAt(l, pos.col);
+  if (i < 0) i = l.tokens.length - 1;
+  // On a space or list comma, the caret belongs to the item before it (`a,|` is in `a`).
+  while (i > 0 && (l.tokens[i].s === "," || !l.tokens[i].s.trim())) i--;
+  return l.tokens[i];
+});
+
+/** Innermost section (query part) the caret is in. */
+export const caretSection = computed<number | null>(() => {
+  const tg = caretToken.value?.tag;
+  return tg && tg[0] === "S" ? Number(tg.slice(1)) : null;
+});
+
+export interface LocalOutline {
+  /** The innermost query around the caret. */
+  query: number;
+  /** The clause of that query the caret is in (SELECT, FROM, ...), and the item within it. */
+  clause: number | null;
+  item: number | null;
+  /** Enclosing queries, outermost first (ending with `query`). */
+  path: number[];
+}
+
+/** The query structure around the caret, for the local outline. */
+export const localOutline = computed<LocalOutline | null>(() => {
   const r = result.value;
-  if (!r) return;
-  const list = r.columns[tagId.slice(0, tagId.indexOf(":"))];
-  if (!list) return;
-  if (list.owner && !isWithinFocus(list.owner)) setFocus(list.owner);
-  else if (!list.owner && state.focus) setFocus(null);
-  const inner = list.foldId ?? list.owner;
-  const toOpen = inner ? [inner, ...ancestors(inner)] : [];
-  setOpen((s) => toOpen.forEach((a) => s.add(a)));
-  state.reveal = { id: tagId, kind: "tag" };
+  if (!r || !r.sections.length) return null;
+  const secs = r.sections;
+  const chain: number[] = [];
+  for (let s: number | null = caretSection.value; s !== null; s = secs[s].parent) chain.push(s);
+  let qi = chain.findIndex((s) => secs[s].kind === "query");
+  if (qi < 0) {
+    // No caret (or outside any query): the query of the current focus, else the top-level one.
+    const q = secs.find((x) => x.kind === "query" && x.fold === state.focus) ?? secs.find((x) => x.kind === "query");
+    if (!q) return null;
+    chain.length = 0;
+    for (let s: number | null = q.id; s !== null; s = secs[s].parent) chain.push(s);
+    qi = 0;
+  }
+  return {
+    query: chain[qi],
+    clause: qi >= 1 ? chain[qi - 1] : null,
+    item: qi >= 2 ? chain[qi - 2] : null,
+    path: chain.slice(qi).filter((s) => secs[s].kind === "query").reverse(),
+  };
+});
+
+export function sectionChildren(id: number): number[] {
+  return sectionKids.get(id) ?? [];
 }
 
-// ---- URL hash: #f=<focus>&p=<panel>&c=<collapsed,...> ---------------------------
+/** A section and everything inside it, as doc tag ids (for highlighting its tokens). */
+export function sectionTags(id: number | null): Set<string> {
+  const out = new Set<string>();
+  if (id === null) return out;
+  const stack = [id];
+  while (stack.length) {
+    const s = stack.pop()!;
+    out.add(sectionTag(s));
+    stack.push(...sectionChildren(s));
+  }
+  return out;
+}
+
+/** Where a section starts in the current layout: its own first token, else its first child's. */
+function sectionStart(lay: LayoutResult, id: number): { line: number; col: number } | null {
+  const tg = sectionTag(id);
+  const line = lay.tagLine.get(tg);
+  const col = lay.tagCol.get(tg);
+  let best = line !== undefined && col !== undefined ? { line, col } : null;
+  for (const k of sectionChildren(id)) {
+    const p = sectionStart(lay, k);
+    if (p && (!best || p.line < best.line || (p.line === best.line && p.col < best.col))) best = p;
+  }
+  return best;
+}
+
+/** Move the caret to the start of a section, opening folds as needed. */
+export function caretToSection(id: number): void {
+  const sec = result.value?.sections[id];
+  if (!sec) return;
+  if (sec.fold ? !isWithinFocus(sec.fold) : state.focus) setFocus(null);
+  if (sec.fold) {
+    const toOpen = [sec.fold, ...ancestors(sec.fold)].filter((a) => a !== state.focus);
+    if (toOpen.some((a) => !openSet.value.has(a))) setOpen((s) => toOpen.forEach((a) => s.add(a)));
+  }
+  const lay = mainLayout.value;
+  const at = lay && sectionStart(lay, id);
+  if (at) setCaretAt(at.line, at.col);
+}
+
+// ---- URL hash: #f=<focus>&c=<collapsed,...> -------------------------------------
 
 function writeHash(push: boolean) {
   if (state.status !== "ready" && state.status !== "loading") return;
   const p = new URLSearchParams();
   if (state.focus) p.set("f", state.focus);
-  if (state.panel) p.set("p", state.panel);
   // Folds start open, so the URL records the collapsed ones.
   const closed = Object.keys(folds.value).filter((id) => !openSet.value.has(id));
   if (closed.length) p.set("c", closed.join(","));
@@ -314,9 +507,7 @@ export function applyHash(initial = false): void {
   const p = new URLSearchParams(location.hash.slice(1));
   const fs = folds.value;
   const f = p.get("f");
-  const panel = p.get("p");
   state.focus = f && fs[f] ? f : null;
-  state.panel = panel && result.value?.columns[panel] ? panel : null;
   const closed = new Set((p.get("c") ?? "").split(","));
   openSet.value = new Set(Object.keys(fs).filter((id) => !closed.has(id)));
   if (initial) writeHash(false);

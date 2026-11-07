@@ -5,11 +5,10 @@ import {
   copyText,
   expandAll,
   focusUp,
-  folds,
-  listForFold,
+  caretToken,
   load,
   mainLayout,
-  openPanel,
+  moveCaret,
   reprint,
   reset,
   restoreSession,
@@ -20,8 +19,7 @@ import {
   toggleOutline,
 } from "./state/store";
 import Breadcrumbs from "./ui/Breadcrumbs.vue";
-import ColumnPanel from "./ui/ColumnPanel.vue";
-import Outline from "./ui/Outline.vue";
+import Sidebar from "./ui/Sidebar.vue";
 import ParseErrorView from "./ui/ParseErrorView.vue";
 import PasteBox from "./ui/PasteBox.vue";
 import SqlView from "./ui/SqlView.vue";
@@ -65,7 +63,24 @@ function onKey(ev: KeyboardEvent) {
     if (ev.key === "Escape") t.blur();
     return;
   }
-  if (ev.metaKey || ev.ctrlKey || ev.altKey) return;
+  // Caret movement, like an editor.
+  const mod = ev.metaKey || ev.ctrlKey;
+  const caretKeys: Record<string, Parameters<typeof moveCaret>[0]> = {
+    ArrowLeft: "left",
+    ArrowRight: "right",
+    ArrowUp: mod ? "top" : "up",
+    ArrowDown: mod ? "bottom" : "down",
+    Home: mod ? "top" : "home",
+    End: mod ? "bottom" : "end",
+    PageUp: "pageUp",
+    PageDown: "pageDown",
+  };
+  if (caretKeys[ev.key] && !ev.altKey && !ev.shiftKey) {
+    moveCaret(caretKeys[ev.key]);
+    ev.preventDefault();
+    return;
+  }
+  if (mod || ev.altKey) return;
   const cur = state.cursor;
   switch (ev.key) {
     case "j":
@@ -78,25 +93,19 @@ function onKey(ev: KeyboardEvent) {
       break;
     }
     case "Enter":
-    case "o":
-      if (cur) toggle(cur);
+    case "o": {
+      // A fold chip under the caret first, else the j/k fold cursor.
+      const t = caretToken.value;
+      if (t?.k === "fold" && t.fold) toggle(t.fold);
+      else if (cur) toggle(cur);
       break;
+    }
     case "f":
       if (cur) setFocus(cur);
       break;
-    case "c": {
-      if (cur && folds.value[cur]?.kind === "columns") openPanel(listForFold(cur) ?? null);
-      else {
-        const target = cur ?? state.focus;
-        const cols = target ? folds.value[target]?.columns : result.value?.rootColumns;
-        if (cols) openPanel(cols);
-      }
-      break;
-    }
     case "Escape":
     case "u":
-      if (ev.key === "Escape" && state.panel) openPanel(null);
-      else focusUp();
+      focusUp();
       break;
     case "E":
       expandAll();
@@ -132,7 +141,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
 <template>
   <PasteBox v-if="state.status === 'empty' || (state.status === 'loading' && !result)" />
   <ParseErrorView v-else-if="state.status === 'error'" @edit="editSql" />
-  <div v-else class="app" :class="{ 'with-panel': !!state.panel, 'outline-closed': !state.outlineOpen }">
+  <div v-else class="app" :class="{ 'outline-closed': !state.outlineOpen }">
     <header class="top">
       <button class="logo" title="New query" @click="reset">sql-snob</button>
       <Breadcrumbs class="bc" />
@@ -158,12 +167,11 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
         <button class="btn" title="Keyboard shortcuts (?)" @click="showHelp = !showHelp">?</button>
       </div>
     </header>
-    <Outline v-if="state.outlineOpen" class="outline" />
-    <button v-else class="outline rail" title="Show outline (s)" @click="toggleOutline">
-      <span class="rail-label">Outline</span>
+    <Sidebar v-if="state.outlineOpen" class="outline" />
+    <button v-else class="outline rail" title="Show sidebar (s)" @click="toggleOutline">
+      <span class="rail-label">Outline · Context</span>
     </button>
     <SqlView class="main" />
-    <ColumnPanel v-if="state.panel" class="side" />
     <footer class="status">
       <span>{{ stats }}</span>
       <span class="muted">Click a chip to expand · ⌘/Ctrl-click to focus · Esc to go up · ? for keys</span>
@@ -175,18 +183,19 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
           <dt>j / k</dt><dd>Next / previous fold</dd>
           <dt>Enter / o</dt><dd>Expand or collapse the fold</dd>
           <dt>f</dt><dd>Focus the fold</dd>
-          <dt>c</dt><dd>Show columns of the fold (or the focused query)</dd>
-          <dt>u / Esc</dt><dd>Up one level (Esc closes the panel first)</dd>
+          <dt>← → ↑ ↓</dt><dd>Move the cursor (Home / End, PageUp / PageDown, ⌘↑ / ⌘↓)</dd>
+          <dt>u / Esc</dt><dd>Focus: up one level</dd>
           <dt>E / C</dt><dd>Expand all / collapse all in view</dd>
-          <dt>s</dt><dd>Show / hide the outline</dd>
+          <dt>s</dt><dd>Show / hide the sidebar</dd>
         </dl>
         <h3>Mouse</h3>
         <dl>
           <dt>Click chip</dt><dd>Expand</dd>
-          <dt>Alt-click chip</dt><dd>Expand everything inside (column lists: open in panel)</dd>
+          <dt>Alt-click chip</dt><dd>Expand everything inside</dd>
           <dt>⌘/Ctrl-click chip</dt><dd>Focus</dd>
-          <dt>Gutter ▾ / ⤢ / ≡</dt><dd>Collapse / focus / show columns in panel</dd>
-          <dt>Outline</dt><dd>Click to show, double-click to focus (column lists: open in panel)</dd>
+          <dt>Gutter ▾ / ⤢</dt><dd>Collapse / focus an open fold</dd>
+          <dt>Outline</dt><dd>Click to show, double-click to focus</dd>
+          <dt>This query</dt><dd>Click a part to move the cursor there</dd>
         </dl>
       </div>
     </div>
@@ -196,7 +205,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
 <style scoped>
 .app {
   display: grid;
-  grid-template-columns: 240px minmax(0, 1fr);
+  grid-template-columns: 300px minmax(0, 1fr);
   grid-template-rows: auto minmax(0, 1fr) auto;
   grid-template-areas:
     "top top"
@@ -204,18 +213,8 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
     "status status";
   height: 100%;
 }
-.app.with-panel {
-  grid-template-columns: 240px minmax(0, 1fr) minmax(320px, 38%);
-  grid-template-areas:
-    "top top top"
-    "outline main side"
-    "status status status";
-}
 .app.outline-closed {
   grid-template-columns: 28px minmax(0, 1fr);
-}
-.app.outline-closed.with-panel {
-  grid-template-columns: 28px minmax(0, 1fr) minmax(320px, 38%);
 }
 .rail {
   border: 0;
@@ -278,7 +277,6 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
 .num { width: 4em; }
 .outline { grid-area: outline; }
 .main { grid-area: main; }
-.side { grid-area: side; }
 .status {
   grid-area: status;
   display: flex;
@@ -311,12 +309,11 @@ dl { display: grid; grid-template-columns: 9em 1fr; gap: 4px 12px; margin: 0 0 1
 dt { font-family: var(--mono); color: var(--accent); }
 dd { margin: 0; }
 @media (max-width: 800px) {
-  .app, .app.with-panel {
+  .app {
     grid-template-columns: minmax(0, 1fr);
-    grid-template-rows: auto minmax(0, 1fr) auto auto;
-    grid-template-areas: "top" "main" "side" "status";
+    grid-template-rows: auto minmax(0, 1fr) auto;
+    grid-template-areas: "top" "main" "status";
   }
   .outline { display: none; }
-  .side { max-height: 40vh; }
 }
 </style>

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed } from "vue";
-import { folds, isOpen, listForFold, openPanel, reveal, setFocus, state, toggle } from "../state/store";
+import { folds, isOpen, reveal, setFocus, state, toggle } from "../state/store";
 
 const props = defineProps<{ id: string; depth: number; expanded: Set<string> }>();
 const emit = defineEmits<{ (e: "toggle", id: string): void }>();
@@ -15,8 +15,7 @@ function onClick() {
   if (f.value.kind === "columns" && !isOpen(props.id)) toggle(props.id);
 }
 function onDbl() {
-  if (f.value.kind === "columns") openPanel(listForFold(props.id) ?? null);
-  else setFocus(props.id);
+  setFocus(props.id);
 }
 </script>
 
@@ -24,7 +23,7 @@ function onDbl() {
   <li v-if="f">
     <div
       class="node"
-      :class="{ focus: state.focus === id, cur: state.cursor === id, panel: f.kind === 'columns' && listForFold(id) === state.panel }"
+      :class="{ focus: state.focus === id, cur: state.cursor === id }"
       :style="{ paddingLeft: depth * 12 + 4 + 'px' }"
       :title="`${f.name} (${f.kind})\nClick: show · Double-click: focus`"
       @click="onClick"
@@ -56,7 +55,7 @@ ul { list-style: none; margin: 0; padding: 0; }
 }
 .node:hover { background: var(--hov); }
 .node.focus { background: var(--hl); font-weight: 600; }
-.node.cur, .node.panel { outline: 1px solid var(--accent); outline-offset: -1px; }
+.node.cur { outline: 1px solid var(--accent); outline-offset: -1px; }
 .tw {
   width: 14px;
   flex: 0 0 14px;

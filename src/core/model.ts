@@ -18,6 +18,10 @@ export interface FoldInfo {
   columns?: string;
   /** For `columns` folds: number of items. */
   count?: number;
+  /** For query folds: SELECT lists that define its output columns (one per UNION arm). */
+  outputs?: string[];
+  /** For query folds: the scope of its (first) SELECT. */
+  scope?: number;
 }
 
 export type ColumnKind = "passthrough" | "rename" | "cast" | "literal" | "function" | "case" | "subquery" | "other";
@@ -30,6 +34,10 @@ export interface ColumnItem {
   expr: Doc;
   /** Tag id of this column in the main doc. */
   tag: string;
+  /** If the expression is a plain column reference (possibly cast), its ref index — for lineage. */
+  ref?: number;
+  /** For computed expressions: the column references it reads (ref indices, one per distinct name). */
+  inputs?: number[];
 }
 
 export interface ColumnList {
@@ -38,6 +46,8 @@ export interface ColumnList {
   owner: string | null;
   /** Fold id of the `columns` fold in the main doc, if the list was long enough to fold. */
   foldId?: string;
+  /** Scope of the SELECT this list belongs to. */
+  scope: number;
   items: ColumnItem[];
 }
 
@@ -57,6 +67,98 @@ export const defaultPrintOptions: PrintOptions = {
   columnFoldThreshold: 8,
 };
 
+/** Identity of a name: unquoted, case-insensitive (`"MEASUREMENT_ID"` = `measurement_id`). */
+export function nameKey(s: string): string {
+  if (s.length >= 2 && s[0] === '"' && s[s.length - 1] === '"') s = s.slice(1, -1).replace(/""/g, '"');
+  return s.toLowerCase();
+}
+
+/**
+ * The structure of a query, for the local outline: a query has clauses (WITH, SELECT, FROM, ...)
+ * and clauses have items (CTEs, columns, the base table and joins, AND-ed conditions, ...).
+ */
+export type SectionKind =
+  | "query"
+  | "union"
+  | "arm"
+  | "with"
+  | "cte"
+  | "select"
+  | "column"
+  | "from"
+  | "source"
+  | "join"
+  | "where"
+  | "having"
+  | "qualify"
+  | "groupby"
+  | "orderby"
+  | "item"
+  | "cond"
+  | "limit"
+  | "clause";
+
+export interface Section {
+  id: number;
+  kind: SectionKind;
+  /** Short name: column output name, join target, clause keyword, ... */
+  label: string;
+  /** Longer one-line text: the expression, the ON condition, ... */
+  detail?: string;
+  /** Join type for `join` items (`LEFT JOIN`). */
+  op?: string;
+  parent: number | null;
+  /** Innermost fold the section is printed in (to reveal it). */
+  fold: string | null;
+}
+
+/** Doc tag id of a section. */
+export const sectionTag = (id: number): string => `S${id}`;
+
+/** A FROM/JOIN entry of a SELECT. */
+export interface Source {
+  /** Name it's referred to by (alias, else table name). */
+  alias: string;
+  key: string;
+  kind: "table" | "derived";
+  /** Table name as written (kind `table`). A table may turn out to be a CTE: see PrintResult.ctes. */
+  table?: string;
+  /** Fold of the subquery (kind `derived`). */
+  fold?: string;
+}
+
+/** One SELECT: what its FROM brings into scope. */
+export interface Scope {
+  id: number;
+  parent: number | null;
+  /** Fold the SELECT is printed in (null = top level). */
+  fold: string | null;
+  sources: Source[];
+  /** Its SELECT list. */
+  list?: string;
+}
+
+/**
+ * What a clickable token means:
+ * - column: a column reference (`name`, or `qualifier.name`)
+ * - qualifier: the `t` in `t.col`
+ * - table / alias: a FROM entry's table name / alias
+ * - output: a column alias in a SELECT list (`AS "X"`)
+ * - cte: a CTE name where it's defined
+ */
+export type RefKind = "column" | "qualifier" | "table" | "alias" | "output" | "cte";
+
+export interface Ref {
+  kind: RefKind;
+  name: string;
+  qualifier?: string;
+  /** Scope the token appears in (-1 = outside any SELECT). */
+  scope: number;
+  listId?: string;
+  index?: number;
+  fold?: string;
+}
+
 export interface PrintResult {
   doc: Doc;
   folds: Record<string, FoldInfo>;
@@ -65,6 +167,11 @@ export interface PrintResult {
   columns: Record<string, ColumnList>;
   /** ColumnList id of the top-level SELECT, if any. */
   rootColumns?: string;
+  sections: Section[];
+  scopes: Scope[];
+  refs: Ref[];
+  /** CTE name key -> fold id. */
+  ctes: Record<string, string>;
 }
 
 export interface ParseError {
