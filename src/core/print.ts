@@ -137,6 +137,9 @@ class Printer {
   columns: Record<string, ColumnList> = {};
   rootColumns: string | undefined;
 
+  /** > 0 while printing a data type, where identifiers are type names, not column/table names. */
+  private typeDepth = 0;
+
   private stack: string[] = [];
   private usedNames = new Set<string>();
   private counters = new Map<string, number>();
@@ -229,7 +232,12 @@ class Printer {
     if (typeof n === "string") return text(n, "op");
     if (Array.isArray(n)) return join(space, n.map((x) => this.node(x, parent)));
     const lead = this.comments(n, "leading");
+    const isType =
+      /data_type|type_param/.test(n.type) ||
+      (parent && (parent.dataType === n || (parent.type === "cast_operator_expr" && parent.right === n)));
+    if (isType) this.typeDepth++;
     const body = this.dispatch(n, parent);
+    if (isType) this.typeDepth--;
     const trail = this.comments(n, "trailing");
     return [lead, body, trail];
   }
@@ -246,6 +254,8 @@ class Printer {
       case "keyword":
         return text(n.text.toUpperCase(), "kw");
       case "identifier":
+        // Type names (`::TEXT`, `MAP(VARCHAR, VARIANT)`) parse as identifiers; color them as syntax.
+        if (this.typeDepth > 0) return text(n.text, "kw");
         return text(n.text, "id");
       case "parameter":
       case "variable":
