@@ -7,25 +7,18 @@ import type { Section, SectionKind } from "../core/model";
 import {
   caretToFold,
   caretToSection,
-  copySectionText,
   firstQuery,
   localOutline,
   result,
   sectionChildren,
-  setFocus,
   state,
-  toggleOutline,
 } from "../state/store";
+import { unquote } from "./labels";
 
 const el = ref<HTMLElement>();
 const secs = computed(() => result.value?.sections ?? []);
 const lo = computed(() => localOutline.value);
 const cur = computed(() => (lo.value ? secs.value[lo.value.query] : null));
-
-/** `"ROWS"` -> `ROWS`: quotes are noise in a navigation list. */
-function unquote(s: string): string {
-  return s.replace(/"((?:[^"]|"")*)"/g, (_, x: string) => x.replace(/""/g, '"'));
-}
 
 /** Shorten a long name in the middle: generated names differ at the end (`…_3bd304_0`). */
 function mid(s: string, max: number): string {
@@ -57,17 +50,6 @@ function joinBadge(s: Section): string {
 /** Rows that lead into a subquery: a derived table, or a CTE. */
 function isSubquery(s: Section): boolean {
   return !!s.targetFold || s.kind === "cte";
-}
-
-/** Breadcrumb label: a UNION arm's name for an arm's query, the owner's name for a UNION. */
-function queryLabel(id: number): string {
-  const s = secs.value[id];
-  if (s.kind === "union") {
-    const first = sectionChildren(id).map((a) => secs.value[a]).find((a) => a.kind === "arm");
-    return first ? first.label.replace(/#\d+$/, "") : s.label;
-  }
-  const p = s.parent !== null ? secs.value[s.parent] : null;
-  return p?.kind === "arm" ? p.label : s.label;
 }
 
 // ---- UNION ------------------------------------------------------------------------
@@ -109,7 +91,7 @@ const clauses = computed(() => {
  * Long lists are cut to the first few rows in every query you enter. Expanding one is remembered
  * for that list (until a new SQL is loaded); other lists still start cut.
  */
-const SHORT = 10;
+const SHORT = 20;
 const expanded = ref(new Set<number>());
 watch(result, () => (expanded.value = new Set()));
 function setExpanded(id: number, on: boolean) {
@@ -125,7 +107,8 @@ function setExpanded(id: number, on: boolean) {
 function shown(clauseId: number, items: Section[]): { rows: Section[]; above: number; below: number } {
   if (items.length <= SHORT + 1 || expanded.value.has(clauseId)) return { rows: items, above: 0, below: 0 };
   const at = items.findIndex((it) => it.id === lo.value?.item);
-  const start = Math.min(items.length - SHORT, at < SHORT ? 0 : at - SHORT + 2);
+  // Centered on the cursor's row (column 30 shows 20-40), clamped to the ends of the list.
+  const start = Math.max(0, Math.min(items.length - SHORT, at - Math.floor(SHORT / 2)));
   return { rows: items.slice(start, start + SHORT), above: start, below: items.length - start - SHORT };
 }
 
@@ -141,24 +124,24 @@ function enter(it: Section) {
   caretToSection(firstQuery(it.id) ?? it.id);
 }
 
-/** The fold that holds this query (null for the top-level query). */
-const ownFold = computed(() => cur.value?.fold ?? null);
-const canFocus = computed(() => !!ownFold.value && state.focus !== ownFold.value);
-function focus() {
-  if (ownFold.value) setFocus(ownFold.value);
-}
-function unfocus() {
-  setFocus(null);
+/** The outline's rows in order: each clause's items (or the clause itself if it has none), or a UNION's arms. */
+const stops = computed<number[]>(() => {
+  if (cur.value?.kind === "union") return unionArms.value.map((a) => a.id);
+  return clauses.value.flatMap(({ c, items }) => (items.length ? items.map((i) => i.id) : [c.id]));
+});
+
+/** With the outline focused, Up / Down step through its rows (moving the cursor in the SQL). */
+function onKey(ev: KeyboardEvent) {
+  if (ev.key !== "ArrowUp" && ev.key !== "ArrowDown") return;
+  ev.preventDefault();
+  const list = stops.value;
+  const l = lo.value;
+  if (!l || !list.length) return;
+  const at = list.indexOf(l.item ?? -1) >= 0 ? list.indexOf(l.item!) : list.indexOf(l.clause ?? -1);
+  const next = at < 0 ? 0 : Math.max(0, Math.min(list.length - 1, at + (ev.key === "ArrowDown" ? 1 : -1)));
+  if (next !== at) go(list[next]);
 }
 
-const copied = ref(false);
-async function copyQuery() {
-  const l = lo.value;
-  if (!l) return;
-  await navigator.clipboard.writeText(copySectionText(l.query));
-  copied.value = true;
-  setTimeout(() => (copied.value = false), 1200);
-}
 function hover(id: number | null) {
   state.hoverSection = id;
 }
@@ -175,22 +158,8 @@ watch(
 </script>
 
 <template>
-  <section ref="el" class="local">
-    <div class="bar">
-      <template v-if="lo">
-        <button class="act" :disabled="!canFocus" title="Show only this query in the SQL view" @click="focus">Focus</button>
-        <button class="act" :disabled="!state.focus" title="Show the whole SQL again" @click="unfocus">Unfocus</button>
-        <button class="act" title="Copy the SQL of this query, fully expanded" @click="copyQuery">{{ copied ? "Copied" : "Copy" }}</button>
-      </template>
-      <button class="hide" title="Hide sidebar (s)" @click="toggleOutline">«</button>
-    </div>
+  <section ref="el" class="local" tabindex="0" @keydown="onKey">
     <template v-if="lo">
-      <div class="path">
-        <template v-for="(q, i) in lo.path" :key="q">
-          <span v-if="i > 0" class="sep">›</span>
-          <button class="crumb" :class="{ cur: q === lo.query, union: secs[q].kind === 'union' }" @click="go(q)">{{ unquote(queryLabel(q)) }}</button>
-        </template>
-      </div>
       <div v-if="arm" class="arm">
         <button class="arm-op" title="Show all the arms of this UNION" @click="go(arm.union)">{{ arm.op }}</button>
         <span>arm {{ arm.index + 1 }} of {{ arm.arms.length }}</span>
@@ -263,6 +232,7 @@ watch(
 
 <style scoped>
 .local {
+  outline: none;
   overflow: auto;
   padding: 6px 8px 16px;
   font-size: 12px;
@@ -271,51 +241,6 @@ watch(
   color: var(--muted);
   margin: 4px;
   line-height: 1.5;
-}
-.path {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 1px;
-  font-family: var(--mono);
-  padding: 0 0 6px;
-}
-.bar {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  padding: 0 0 6px;
-}
-.act {
-  font-size: 11px;
-  border: 1px solid var(--border);
-  background: var(--bg);
-  color: var(--fg);
-  border-radius: 3px;
-  padding: 1px 7px;
-  cursor: pointer;
-}
-.act:hover:not(:disabled) {
-  border-color: var(--accent);
-}
-.act:disabled {
-  opacity: 0.35;
-  cursor: default;
-}
-.hide {
-  margin-left: auto;
-  border: 0;
-  background: none;
-  color: var(--muted);
-  cursor: pointer;
-  font-size: 14px;
-  padding: 0 4px;
-}
-.hide:hover {
-  color: var(--accent);
-}
-.crumb.union {
-  font-style: italic;
 }
 .arm-op {
   border: 0;
@@ -340,25 +265,6 @@ watch(
 }
 .row.more:hover .text {
   color: var(--accent);
-}
-.crumb {
-  border: 0;
-  background: none;
-  color: var(--accent);
-  cursor: pointer;
-  font: inherit;
-  padding: 1px 3px;
-  border-radius: 3px;
-}
-.crumb:hover {
-  background: var(--hov);
-}
-.crumb.cur {
-  color: var(--fg);
-  font-weight: 600;
-}
-.sep {
-  color: var(--muted);
 }
 .arm {
   display: flex;
@@ -439,6 +345,9 @@ watch(
 }
 .row.cur {
   background: var(--hl);
+}
+.local:focus-within .row.cur {
+  box-shadow: inset 2px 0 0 var(--accent);
 }
 .text {
   flex: 1 1 auto;

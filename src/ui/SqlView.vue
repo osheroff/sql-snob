@@ -7,6 +7,7 @@ import {
   folds,
   localOutline,
   mainLayout,
+  moveCaret,
   sectionTags,
   setCaretAt,
   setFocus,
@@ -15,7 +16,7 @@ import {
 } from "../state/store";
 
 const LINE_H = 20;
-const GUTTER_PX = 44;
+const GUTTER_PX = 20;
 const BUFFER = 30;
 
 const el = ref<HTMLElement>();
@@ -63,7 +64,7 @@ let ro: ResizeObserver | undefined;
 let resizeTimer: number | undefined;
 function fitWidth() {
   const e = el.value!;
-  state.width = Math.max(40, Math.floor((e.clientWidth - GUTTER_PX - 24) / charW.value));
+  state.width = Math.max(40, Math.floor((e.clientWidth - GUTTER_PX - 16) / charW.value));
 }
 
 onMounted(() => {
@@ -77,8 +78,12 @@ onMounted(() => {
     resizeTimer = window.setTimeout(fitWidth, 60);
   });
   ro.observe(el.value!);
+  window.addEventListener("keydown", onKey);
 });
-onBeforeUnmount(() => ro?.disconnect());
+onBeforeUnmount(() => {
+  ro?.disconnect();
+  window.removeEventListener("keydown", onKey);
+});
 
 function scrollIntoView(line: number, col?: number, center = false) {
   const e = el.value;
@@ -129,8 +134,6 @@ function onClick(ev: MouseEvent) {
   const t = ev.target as HTMLElement;
   const g = t.closest<HTMLElement>("[data-toggle]");
   if (g) return toggle(g.dataset.toggle!);
-  const fb = t.closest<HTMLElement>("[data-focus]");
-  if (fb) return setFocus(fb.dataset.focus!);
 
   const chip = t.closest<HTMLElement>("[data-fold]");
   if (chip) {
@@ -157,6 +160,31 @@ function placeCaret(ev: MouseEvent) {
   el.value?.focus({ preventScroll: true });
 }
 
+/** Arrow keys move the caret, like an editor (only while the SQL view has the focus). */
+function onKey(ev: KeyboardEvent) {
+  const a = document.activeElement;
+  if (a && a !== document.body && !el.value?.contains(a)) return; // typing elsewhere
+  const mod = ev.metaKey || ev.ctrlKey;
+  const keys: Record<string, Parameters<typeof moveCaret>[0]> = {
+    ArrowLeft: "left",
+    ArrowRight: "right",
+    ArrowUp: mod ? "top" : "up",
+    ArrowDown: mod ? "bottom" : "down",
+    Home: mod ? "top" : "home",
+    End: mod ? "bottom" : "end",
+    PageUp: "pageUp",
+    PageDown: "pageDown",
+  };
+  if (!keys[ev.key] || ev.altKey || ev.shiftKey) return;
+  moveCaret(keys[ev.key]);
+  ev.preventDefault();
+}
+
+/** A collapsed column list on this line: its toggle goes in the gutter. */
+function closedCols(l: { tokens: { k: string; fold?: string }[] }): string | undefined {
+  return l.tokens.find((t) => t.k === "fold" && t.fold && folds.value[t.fold]?.kind === "columns")?.fold;
+}
+
 function chipTitle(id: string): string {
   const f = folds.value[id];
   if (!f) return "";
@@ -179,15 +207,8 @@ function chipTitle(id: string): string {
           :class="{ flash: n === flashLine, cursor: n === cursorLine, 'caret-line': n === caretPos?.line }"
         >
           <span class="gutter">
-            <template v-if="l.opens">
-              <button class="g-btn" :data-toggle="l.opens[0]" :title="`Collapse ${folds[l.opens[0]]?.name}`">▾</button>
-              <button
-                v-if="folds[l.opens[0]]?.kind !== 'columns'"
-                class="g-btn g-focus"
-                :data-focus="l.opens[0]"
-                :title="`Focus ${folds[l.opens[0]]?.name}`"
-              >⤢</button>
-            </template>
+            <button v-if="l.opens" class="g-btn" :data-toggle="l.opens[0]" :title="`Collapse ${folds[l.opens[0]]?.name}`">▾</button>
+            <button v-else-if="closedCols(l)" class="g-btn" :data-toggle="closedCols(l)" :title="`Expand ${folds[closedCols(l)!]?.name}`">▸</button>
           </span>
           <span class="code" :style="{ paddingLeft: l.indent * charW + 'px' }"><template v-for="(t, i) in l.tokens" :key="i"><span
                 v-if="t.k === 'fold'"
@@ -195,7 +216,7 @@ function chipTitle(id: string): string {
                 :class="[folds[t.fold!]?.kind, { cur: t.fold === state.cursor, 'cur-sec': t.tag && curTags.has(t.tag), hov: t.tag && hoverTags.has(t.tag) }]"
                 :data-fold="t.fold"
                 :title="chipTitle(t.fold!)"
-              ><span class="tri">▸</span> {{ t.s }}</span><span
+              ><template v-if="folds[t.fold!]?.kind === 'columns'">{{ "\u00a0" + t.s + "\u00a0" }}</template><template v-else><span class="tri">▸</span> {{ t.s }}</template></span><span
                 v-else
                 :class="['t-' + t.k, { 'cur-sec': t.tag && curTags.has(t.tag), hov: t.tag && hoverTags.has(t.tag) }]"
               >{{ t.s }}</span></template></span>
@@ -233,9 +254,6 @@ function chipTitle(id: string): string {
   display: flex;
   white-space: pre;
 }
-.row:hover .g-focus {
-  opacity: 1;
-}
 .row.caret-line {
   background: var(--cursor-bg);
 }
@@ -251,11 +269,11 @@ function chipTitle(id: string): string {
   }
 }
 .gutter {
-  flex: 0 0 44px;
+  flex: 0 0 20px;
   display: flex;
   gap: 2px;
   justify-content: flex-end;
-  padding-right: 6px;
+  padding-right: 2px;
   user-select: none;
   cursor: default;
 }
@@ -270,9 +288,6 @@ function chipTitle(id: string): string {
 }
 .g-btn:hover {
   color: var(--accent);
-}
-.g-focus {
-  opacity: 0;
 }
 .code {
   font-family: var(--mono);
@@ -315,9 +330,17 @@ function chipTitle(id: string): string {
   pointer-events: none;
   animation: blink 1.1s steps(1) infinite;
 }
+/* Without the focus the caret still blinks, faintly. */
 .sqlview:not(:focus) .caret {
-  opacity: 0.45;
-  animation: none;
+  animation-name: blink-faint;
+}
+@keyframes blink-faint {
+  0% {
+    opacity: 0.4;
+  }
+  50% {
+    opacity: 0;
+  }
 }
 @keyframes blink {
   50% {

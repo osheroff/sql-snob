@@ -61,7 +61,6 @@ function toggle(id: string) {
     <button class="head" :title="open ? 'Hide the outline of the whole query' : 'Show the outline of the whole query'" @click="toggleTree">
       <span class="tri">{{ open ? "▾" : "▸" }}</span>
       <span>Outline</span>
-      <span class="n">{{ Object.keys(folds).length }}</span>
     </button>
     <template v-if="open">
       <ul v-if="result?.roots.length">
@@ -101,9 +100,6 @@ function toggle(id: string) {
 .tri {
   font-size: 10px;
   width: 1em;
-}
-.n {
-  margin-left: auto;
 }
 ul { list-style: none; margin: 0; padding: 0; }
 .empty { color: var(--muted); font-size: 12px; padding: 6px; }
