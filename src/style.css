@@ -14,6 +14,8 @@
   --flash: rgba(250, 200, 50, 0.3);
   --cursor-bg: rgba(255, 255, 255, 0.05);
   --cur-sec: rgba(255, 255, 255, 0.045);
+  --same-id: rgba(232, 193, 90, 0.16);
+  --same-id-border: rgba(232, 193, 90, 0.4);
   --shadow: rgba(0, 0, 0, 0.6);
   --scrim: rgba(0, 0, 0, 0.6);
   --err: #ff7b72;

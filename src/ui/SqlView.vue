@@ -1,10 +1,12 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { lineWidth } from "../core/layout";
+import { nameKey } from "../core/model";
 import {
   caretPos,
   expandDeep,
   folds,
+  identMatches,
   localOutline,
   mainLayout,
   moveCaret,
@@ -46,6 +48,12 @@ const cursorLine = computed(() => (state.cursor ? (mainLayout.value?.foldLine.ge
 /** Tokens of the outline item the caret is in, and of the item hovered in the outline. */
 const curTags = computed(() => sectionTags(localOutline.value?.item ?? null));
 const hoverTags = computed(() => sectionTags(state.hoverSection));
+
+/** Is this token a usage of the identifier under the caret (in the current block)? */
+function sameIdent(t: { k: string; s: string; tag?: string }): boolean {
+  const m = identMatches.value;
+  return !!m && t.k === "id" && !!t.tag && m.tags.has(t.tag) && nameKey(t.s) === m.key;
+}
 
 function onScroll() {
   scrollTop.value = el.value!.scrollTop;
@@ -218,7 +226,7 @@ function chipTitle(id: string): string {
                 :title="chipTitle(t.fold!)"
               ><template v-if="folds[t.fold!]?.kind === 'columns'">{{ "\u00a0" + t.s + "\u00a0" }}</template><template v-else><span class="tri">▸</span> {{ t.s }}</template></span><span
                 v-else
-                :class="['t-' + t.k, { 'cur-sec': t.tag && curTags.has(t.tag), hov: t.tag && hoverTags.has(t.tag) }]"
+                :class="['t-' + t.k, { 'cur-sec': t.tag && curTags.has(t.tag), hov: t.tag && hoverTags.has(t.tag), 'same-id': sameIdent(t) }]"
               >{{ t.s }}</span></template></span>
         </div>
       </div>
@@ -321,6 +329,11 @@ function chipTitle(id: string): string {
 }
 .hov {
   background: var(--hl);
+}
+.same-id {
+  background: var(--same-id);
+  box-shadow: 0 0 0 1px var(--same-id-border);
+  border-radius: 2px;
 }
 .caret {
   position: absolute;

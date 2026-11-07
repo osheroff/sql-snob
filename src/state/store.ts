@@ -5,6 +5,7 @@ import { eachFold, type Doc, type Fold, type Text } from "../core/doc";
 import { layout, lineWidth, toText, tokenAt, tokenWidth, type LayoutResult, type Token } from "../core/layout";
 import {
   defaultPrintOptions,
+  nameKey,
   sectionTag,
   type FoldInfo,
   type ParseError,
@@ -411,6 +412,48 @@ export const caretToken = computed(() => {
   // On a space or list comma, the caret belongs to the item before it (`a,|` is in `a`).
   while (i > 0 && (l.tokens[i].s === "," || !l.tokens[i].s.trim())) i--;
   return l.tokens[i];
+});
+
+/** The identifier under the caret: on it, or just after it (`STATE|,`). */
+const caretIdent = computed<Token | null>(() => {
+  const pos = caretPos.value;
+  const lay = mainLayout.value;
+  if (!pos || !lay) return null;
+  const l = lay.lines[pos.line];
+  if (!l?.tokens.length) return null;
+  const { i } = tokenAt(l, pos.col);
+  const t = i >= 0 ? l.tokens[i] : null;
+  if (t?.k === "id") return t;
+  // At the end of an identifier: the token that ends at the caret.
+  let col = l.indent;
+  for (const x of l.tokens) {
+    const w = tokenWidth(x);
+    if (col + w === pos.col) return x.k === "id" ? x : null;
+    col += w;
+  }
+  return null;
+});
+
+/**
+ * Usages of the identifier under the caret within the current block (the query around the caret,
+ * not its subqueries; all the arms for a UNION): its name key and the section tags to look in.
+ */
+export const identMatches = computed<{ key: string; tags: Set<string> } | null>(() => {
+  const t = caretIdent.value;
+  const l = localOutline.value;
+  const secs = result.value?.sections;
+  if (!t || !l || !secs) return null;
+  const root = l.query;
+  const tags = new Set<string>();
+  const stack = [root];
+  while (stack.length) {
+    const s = stack.pop()!;
+    const k = secs[s].kind;
+    if (s !== root && (k === "query" || k === "union") && secs[root].kind !== "union") continue;
+    tags.add(sectionTag(s));
+    stack.push(...sectionChildren(s));
+  }
+  return { key: nameKey(t.s), tags };
 });
 
 /** Innermost section (query part) the caret is in. */
