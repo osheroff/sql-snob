@@ -29,7 +29,7 @@ self.onmessage = (ev: MessageEvent<Request>) => {
     res = { id: req.id, ok: false, error: { message: "Nothing loaded", line: 1, col: 1 } };
   } else {
     const t1 = performance.now();
-    const result = printSql(cst, sql, req.opts);
+    const result = printSql(cst, sql, req.opts, dialect);
     res = { id: req.id, ok: true, result, dialect, ms: { parse: parseMs, print: performance.now() - t1 } };
   }
   (self as unknown as Worker).postMessage(res);

@@ -58,6 +58,8 @@ export interface PrintOptions {
   collapseAliases: boolean;
   /** SELECT lists with at least this many columns become a `columns` fold. */
   columnFoldThreshold: number;
+  /** Drop quotes around names that don't need them: `"rows"."id"` -> `rows.id`. */
+  stripQuotes: boolean;
 }
 
 export const defaultPrintOptions: PrintOptions = {
@@ -65,6 +67,7 @@ export const defaultPrintOptions: PrintOptions = {
   hideObviousCasts: true,
   collapseAliases: true,
   columnFoldThreshold: 8,
+  stripQuotes: true,
 };
 
 /** Identity of a name: unquoted, case-insensitive (`"MEASUREMENT_ID"` = `measurement_id`, `` `Id` `` = `id`). */

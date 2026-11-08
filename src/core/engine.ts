@@ -50,6 +50,6 @@ function parseIn(sql: string, dialect: Dialect): ParseOutcome {
   }
 }
 
-export function printSql(cst: Program, sql: string, opts: PrintOptions): PrintResult {
-  return print(cst, sql, opts);
+export function printSql(cst: Program, sql: string, opts: PrintOptions, dialect: Dialect = "postgresql"): PrintResult {
+  return print(cst, sql, opts, dialect);
 }

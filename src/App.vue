@@ -149,6 +149,7 @@ openRoute();
             <label><input v-model="state.opts.removeParens" type="checkbox" @change="onOpt" /> Remove redundant parentheses</label>
             <label><input v-model="state.opts.hideObviousCasts" type="checkbox" @change="onOpt" /> Hide obvious casts (<code>'x'::TEXT</code>)</label>
             <label><input v-model="state.opts.collapseAliases" type="checkbox" @change="onOpt" /> Collapse <code>"X" AS "X"</code></label>
+            <label><input v-model="state.opts.stripQuotes" type="checkbox" @change="onOpt" /> Remove unneeded quotes (<code>"rows"."id"</code>)</label>
             <button class="btn new" @click="reset">New query…</button>
           </div></div>
         </div>

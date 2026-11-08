@@ -4,7 +4,7 @@
 // `generic`, which prints its children in source order and keeps the original punctuation
 // between them (with whitespace collapsed). So unknown syntax is never lost, only left unformatted.
 
-import type { Program } from "sql-parser-cst";
+import { mysqlKeywords, postgresqlKeywords, postgresqlRequiresAsKeywords, type Program } from "sql-parser-cst";
 import {
   type Doc,
   type Kind,
@@ -26,6 +26,7 @@ import {
   type ColumnItem,
   type ColumnKind,
   type ColumnList,
+  type Dialect,
   type FoldInfo,
   type FoldKind,
   type PrintOptions,
@@ -147,6 +148,24 @@ function exprRank(n: N): number {
 }
 
 /** Display name of an identifier: unquoted name if it has one. */
+/**
+ * A quoted name without its quotes, if that names the same thing: PostgreSQL folds unquoted names
+ * to lowercase, so only lowercase names qualify; MySQL compares them as written. Reserved words
+ * (and PostgreSQL's words that need `AS` before an alias) keep their quotes.
+ */
+export function stripIdentQuotes(s: string, dialect: Dialect): string {
+  const q = dialect === "mysql" ? "`" : '"';
+  if (s.length < 3 || s[0] !== q || s[s.length - 1] !== q) return s;
+  const inner = s.slice(1, -1);
+  const upper = inner.toUpperCase();
+  if (dialect === "mysql") {
+    if (!/^[A-Za-z_$][A-Za-z0-9_$]*$/.test(inner) || mysqlKeywords[upper]) return s;
+  } else if (!/^[a-z_][a-z0-9_$]*$/.test(inner) || postgresqlKeywords[upper] || postgresqlRequiresAsKeywords[upper]) {
+    return s;
+  }
+  return inner;
+}
+
 function identName(n: N): string {
   if (!n) return "";
   if (n.type === "identifier") return n.name ?? n.text;
@@ -213,6 +232,7 @@ class Printer {
   constructor(
     private src: string,
     private opts: PrintOptions,
+    private dialect: Dialect = "postgresql",
   ) {}
 
   // ---- folds ----------------------------------------------------------------
@@ -382,7 +402,12 @@ class Printer {
   /** An identifier token that means something (see RefKind). */
   private ident(n: N, kind: RefKind, extra: Partial<Ref> = {}): Doc {
     this.lastRef = this.ref({ kind, name: n.text, ...extra });
-    return [this.comments(n), { t: "s", s: n.text, k: "id", r: this.lastRef }, this.comments(n, "trailing")];
+    return [this.comments(n), { t: "s", s: this.identText(n.text), k: "id", r: this.lastRef }, this.comments(n, "trailing")];
+  }
+
+  /** A name as printed: without its quotes when they aren't needed (and the option is on). */
+  private identText(s: string): string {
+    return this.opts.stripQuotes ? stripIdentQuotes(s, this.dialect) : s;
   }
 
   private addSource(src: Omit<Source, "key">): void {
@@ -451,7 +476,7 @@ class Printer {
       case "identifier":
         // Type names (`::TEXT`, `MAP(VARCHAR, VARIANT)`) parse as identifiers; color them as syntax.
         if (this.typeDepth > 0) return text(n.text, "kw");
-        return { t: "s", s: n.text, k: "id", r: this.ref({ kind: "column", name: n.text }) };
+        return { t: "s", s: this.identText(n.text), k: "id", r: this.ref({ kind: "column", name: n.text }) };
       case "member_expr":
         // `t.col` / `t.*`: the qualifier and the column are separately clickable.
         if (
@@ -843,7 +868,9 @@ class Printer {
 
   private tableName(e: N): Doc {
     const t = this.entityText(e);
-    return [this.comments(e), { t: "s", s: t, k: "id", r: this.ref({ kind: "table", name: t }) }, this.comments(e, "trailing")];
+    // `schema.table`: each part separately (a quoted part may contain dots).
+    const shown = this.opts.stripQuotes ? (t.match(/"(?:[^"]|"")*"|`(?:[^`]|``)*`|[^.]+/g) ?? [t]).map((x) => this.identText(x)).join(".") : t;
+    return [this.comments(e), { t: "s", s: shown, k: "id", r: this.ref({ kind: "table", name: t }) }, this.comments(e, "trailing")];
   }
 
   private alias(n: N): Doc {
@@ -1104,8 +1131,8 @@ function classify(expr: N, alias: N, sameName: boolean): ColumnKind {
   }
 }
 
-export function print(cst: Program, src: string, opts: PrintOptions): PrintResult {
-  const p = new Printer(src, opts);
+export function print(cst: Program, src: string, opts: PrintOptions, dialect: Dialect = "postgresql"): PrintResult {
+  const p = new Printer(src, opts, dialect);
   const doc = p.node(cst);
   return {
     doc,

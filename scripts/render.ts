@@ -18,7 +18,7 @@ if (!p.ok) {
   process.exit(1);
 }
 const t1 = performance.now();
-const r = printSql(p.cst, sql, defaultPrintOptions);
+const r = printSql(p.cst, sql, defaultPrintOptions, p.dialect);
 const t2 = performance.now();
 const out = layout(r.doc, {
   width,
