@@ -82,6 +82,8 @@ function call(req: DistributiveOmit<Request, "id">): Promise<Response> {
 export const state = reactive({
   sql: "",
   status: "empty" as "empty" | "loading" | "ready" | "error",
+  /** Loading a query that was already being viewed (page reload, dialect change), not one from the paste box. */
+  restoring: false,
   error: null as ParseError | null,
   opts: { ...defaultPrintOptions } as PrintOptions,
   /** Dialect setting; remembered per browser. */
@@ -147,6 +149,7 @@ export async function load(sql: string, restore = false): Promise<void> {
   if (!restore) history.replaceState(null, "", location.pathname);
   state.sql = sql;
   state.status = "loading";
+  state.restoring = restore;
   try {
     sessionStorage.setItem(SQL_KEY, sql);
     sessionStorage.setItem(VIEWING_KEY, "1");

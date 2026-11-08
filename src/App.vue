@@ -68,7 +68,9 @@ function onOpt() {
 </script>
 
 <template>
-  <PasteBox v-if="state.status === 'empty' || (state.status === 'loading' && !result)" />
+  <PasteBox v-if="state.status === 'empty' || (state.status === 'loading' && !result && !state.restoring)" />
+  <!-- Reloading a viewed query: render nothing until it's parsed, rather than flash the paste box. -->
+  <div v-else-if="state.status === 'loading' && !result" />
   <ParseErrorView v-else-if="state.status === 'error'" @edit="editSql" />
   <div v-else class="app" :class="{ 'outline-closed': !state.outlineOpen }">
     <Sidebar v-if="state.outlineOpen" class="outline" />
