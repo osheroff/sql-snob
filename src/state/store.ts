@@ -6,6 +6,8 @@ import { layout, lineWidth, toText, tokenAt, tokenWidth, type LayoutResult, type
 import {
   defaultPrintOptions,
   nameKey,
+  type Dialect,
+  type DialectChoice,
   sectionTag,
   type FoldInfo,
   type ParseError,
@@ -18,6 +20,27 @@ const SQL_KEY = "sql-snob:sql";
 const OUTLINE_KEY = "sql-snob:sidebar";
 /** Set while a query is being viewed, so a page reload goes back to the viewer, not the paste box. */
 const VIEWING_KEY = "sql-snob:viewing";
+const DIALECT_KEY = "sql-snob:dialect";
+
+function readDialectPref(): DialectChoice {
+  try {
+    const d = localStorage.getItem(DIALECT_KEY);
+    return d === "postgresql" || d === "mysql" ? d : "auto";
+  } catch {
+    return "auto";
+  }
+}
+
+/** Change the dialect setting and re-parse the current query with it. */
+export function setDialect(d: DialectChoice): void {
+  state.dialect = d;
+  try {
+    localStorage.setItem(DIALECT_KEY, d);
+  } catch {
+    /* storage unavailable */
+  }
+  if (state.status === "ready" || state.status === "error") load(state.sql, true);
+}
 
 function readOutlinePref(): boolean {
   try {
@@ -61,6 +84,10 @@ export const state = reactive({
   status: "empty" as "empty" | "loading" | "ready" | "error",
   error: null as ParseError | null,
   opts: { ...defaultPrintOptions } as PrintOptions,
+  /** Dialect setting; remembered per browser. */
+  dialect: readDialectPref(),
+  /** Dialect the loaded query was parsed in (the detected one with `auto`). */
+  parsedAs: "postgresql" as Dialect,
   /** Fold id the main view is rooted at (null = whole query). */
   focus: null as string | null,
   /** The text cursor in the SQL. */
@@ -126,13 +153,14 @@ export async function load(sql: string, restore = false): Promise<void> {
   } catch {
     /* storage unavailable */
   }
-  const res = await call({ type: "load", sql, opts: { ...state.opts } });
+  const res = await call({ type: "load", sql, dialect: state.dialect, opts: { ...state.opts } });
   if (!res.ok) {
     state.status = "error";
     state.error = res.error;
     result.value = null;
     return;
   }
+  state.parsedAs = res.dialect;
   setResult(res.result, res.ms);
   const r = res.result;
   openSet.value = new Set(Object.keys(r.folds)); // start fully expanded
@@ -140,6 +168,8 @@ export async function load(sql: string, restore = false): Promise<void> {
   state.cursor = null;
   state.caret = null;
   state.hoverSection = null;
+  state.viewSection = null;
+  state.reveal = null;
   applyHash(true);
   state.status = "ready";
 }
@@ -275,6 +305,7 @@ function queryFold(id: string | null): string | null {
 export function setFocus(id: string | null): void {
   id = queryFold(id);
   if (id === state.focus) return;
+  beforeJump();
   state.focus = id;
   state.cursor = null;
   writeHash(true);
@@ -330,10 +361,14 @@ export const caretPos = computed<{ line: number; col: number } | null>(() => {
   return { line, col: Math.min(c.col, lineWidth(lay.lines[line])) };
 });
 
-/** Put the caret at a layout position (clamped to the text). */
-export function setCaretAt(line: number, col: number, keepGoal = false): void {
+/**
+ * Put the caret at a layout position (clamped to the text). `jump` makes it a new history entry
+ * (Back returns to where the caret was); small moves such as arrow keys only update the current one.
+ */
+export function setCaretAt(line: number, col: number, keepGoal = false, jump = false): void {
   const lay = mainLayout.value;
   if (!lay || !lay.lines.length) return;
+  if (jump) beforeJump();
   line = Math.max(0, Math.min(line, lay.lines.length - 1));
   const l = lay.lines[line];
   col = Math.max(l.tokens.length ? l.indent : 0, Math.min(col, lineWidth(l)));
@@ -363,6 +398,7 @@ export function setCaretAt(line: number, col: number, keepGoal = false): void {
     f: t?.f ?? null,
     goal,
   };
+  writeHash(jump);
 }
 
 export function moveCaret(how: "left" | "right" | "up" | "down" | "home" | "end" | "pageUp" | "pageDown" | "top" | "bottom"): void {
@@ -394,9 +430,9 @@ export function moveCaret(how: "left" | "right" | "up" | "down" | "home" | "end"
     case "end":
       return setCaretAt(pos.line, Infinity);
     case "top":
-      return setCaretAt(0, 0);
+      return setCaretAt(0, 0, false, true);
     case "bottom":
-      return setCaretAt(lay.lines.length - 1, Infinity);
+      return setCaretAt(lay.lines.length - 1, Infinity, false, true);
   }
 }
 
@@ -553,6 +589,7 @@ export function caretToFold(foldId: string): void {
 export function caretToSection(id: number): void {
   const sec = result.value?.sections[id];
   if (!sec) return;
+  beforeJump();
   if (sec.fold ? !isWithinFocus(sec.fold) : state.focus) setFocus(null);
   if (sec.fold) {
     const toOpen = [sec.fold, ...ancestors(sec.fold)].filter((a) => a !== state.focus);
@@ -560,35 +597,94 @@ export function caretToSection(id: number): void {
   }
   const lay = mainLayout.value;
   const at = lay && sectionStart(lay, id);
-  if (at) setCaretAt(at.line, at.col);
+  if (at) setCaretAt(at.line, at.col, false, true);
   // A UNION starts where its first arm does: pin the outline to the UNION itself.
   if (sec.kind === "union") state.viewSection = id;
 }
 
-// ---- URL hash: #f=<focus>&c=<collapsed,...> -------------------------------------
+// ---- URL hash: #f=<focus>&c=<collapsed,...>&p=<line>.<col> ----------------------
+
+/**
+ * A new history entry is written at the end of the current task, so one action (move into a fold:
+ * focus + open + caret) makes one entry. Updates to the current entry (arrow keys) are debounced:
+ * browsers throttle replaceState (Safari throws after ~100 calls in 30s).
+ */
+let pushQueued = false;
+let replaceTimer = 0;
 
 function writeHash(push: boolean) {
+  if (applying) return;
+  if (push) {
+    if (pushQueued) return;
+    pushQueued = true;
+    queueMicrotask(() => {
+      if (!pushQueued) return;
+      pushQueued = false;
+      clearTimeout(replaceTimer);
+      replaceTimer = 0;
+      flushHash(true);
+    });
+  } else if (!pushQueued) {
+    clearTimeout(replaceTimer);
+    replaceTimer = window.setTimeout(() => {
+      replaceTimer = 0;
+      flushHash(false);
+    }, 300);
+  }
+}
+
+/** Before a jump: save the current state (e.g. a caret moved by arrow keys) into the current entry. */
+function beforeJump() {
+  if (!replaceTimer || pushQueued) return;
+  clearTimeout(replaceTimer);
+  replaceTimer = 0;
+  flushHash(false);
+}
+
+/** Cancel queued writes (they describe a state that is being replaced). */
+function dropHashWrites() {
+  pushQueued = false;
+  clearTimeout(replaceTimer);
+  replaceTimer = 0;
+}
+
+function flushHash(push: boolean) {
   if (state.status !== "ready" && state.status !== "loading") return;
   const p = new URLSearchParams();
   if (state.focus) p.set("f", state.focus);
   // Folds start open, so the URL records the collapsed ones.
   const closed = Object.keys(folds.value).filter((id) => !openSet.value.has(id));
   if (closed.length) p.set("c", closed.join(","));
+  // The caret as a position in the layout, which the focus and collapsed folds above determine.
+  const at = caretPos.value;
+  if (at) p.set("p", `${at.line + 1}.${at.col + 1}`);
   const url = `${location.pathname}#${p.toString().replace(/%2C/g, ",")}`;
   if (url === location.pathname + location.hash) return;
   if (push) history.pushState(null, "", url);
   else history.replaceState(null, "", url);
 }
 
+/** Set while the state is being restored from the hash, so restoring doesn't write it back. */
+let applying = false;
+
 /** Apply the URL hash to the state (after load, and on back/forward). */
 export function applyHash(initial = false): void {
   const p = new URLSearchParams(location.hash.slice(1));
   const fs = folds.value;
   const f = p.get("f");
-  state.focus = f && fs[f] ? f : null;
-  const closed = new Set((p.get("c") ?? "").split(","));
-  openSet.value = new Set(Object.keys(fs).filter((id) => !closed.has(id)));
-  if (initial) writeHash(false);
+  applying = true;
+  try {
+    state.focus = f && fs[f] ? f : null;
+    const closed = new Set((p.get("c") ?? "").split(","));
+    openSet.value = new Set(Object.keys(fs).filter((id) => !closed.has(id)));
+    const m = /^(\d+)\.(\d+)$/.exec(p.get("p") ?? "");
+    if (m) setCaretAt(Number(m[1]) - 1, Number(m[2]) - 1);
+    else state.caret = null;
+  } finally {
+    applying = false;
+  }
+  dropHashWrites();
+  if (initial) flushHash(false);
 }
 
 window.addEventListener("popstate", () => {

@@ -19,6 +19,7 @@ import {
   space,
   tag,
   text,
+  flat,
 } from "./doc";
 import {
   nameKey,
@@ -103,6 +104,24 @@ function isSubSelect(n: N): boolean {
 function unwrapParens(n: N): N {
   while (n.type === "paren_expr") n = n.expr;
   return n;
+}
+
+/** Drop parens that wrap all of `s`: `(a OR b)` -> `a OR b`, but `(a) + (b)` stays. */
+function unwrapLabel(s: string): string {
+  while (s.startsWith("(") && s.endsWith(")")) {
+    let depth = 0;
+    let quote = "";
+    for (let i = 0; i < s.length; i++) {
+      const c = s[i];
+      if (quote) {
+        if (c === quote) quote = "";
+      } else if (c === "'" || c === '"' || c === "`") quote = c;
+      else if (c === "(") depth++;
+      else if (c === ")" && --depth === 0 && i < s.length - 1) return s;
+    }
+    s = s.slice(1, -1).trim();
+  }
+  return s;
 }
 
 function opName(op: N): string {
@@ -264,13 +283,25 @@ class Printer {
   // ---- sections (query structure) --------------------------------------------
 
   /** Print `fn()` as a section: a tagged region of the doc, nested in the current section. */
-  private sec(kind: SectionKind, label: string, fn: () => Doc, more: Partial<Section> = {}): Doc {
+  /**
+   * A section around `fn`'s doc. A null `label` (or `detail: null`) is filled in from the printed doc,
+   * so the outline shows what the SQL view shows (parens removed, keywords uppercased, ...).
+   */
+  private sec(
+    kind: SectionKind,
+    label: string | null,
+    fn: () => Doc,
+    more: Omit<Partial<Section>, "detail"> & { detail?: string | null } = {},
+  ): Doc {
     const id = this.sections.length;
     const parent = this.secStack.length ? this.secStack[this.secStack.length - 1] : null;
-    this.sections.push({ id, kind, label, parent, fold: this.current, ...more });
+    const sec: Section = { id, kind, label: label ?? "", parent, fold: this.current, ...more, detail: more.detail ?? undefined };
+    this.sections.push(sec);
     this.secStack.push(id);
     const doc = fn();
     this.secStack.pop();
+    if (label === null) sec.label = flat(doc);
+    if (more.detail === null) sec.detail = flat(doc);
     return tag(`S${id}`, doc);
   }
 
@@ -283,14 +314,27 @@ class Printer {
   private clause(c: N, parent: N): Doc {
     const kind = CLAUSE_KIND[c.type] ?? "clause";
     const label = CLAUSE_LABEL[kind] ?? this.snippet(c, 40);
-    const detail = kind === "limit" || kind === "clause" ? this.snippet(c) : undefined;
+    const detail = kind === "clause" ? null : undefined;
     return this.sec(kind, label, () => this.node(c, parent), { detail });
+  }
+
+  /**
+   * One condition. Its outline label drops identifier quotes and wrapping parens:
+   * `("T"."ID" = 1 OR b)` -> `T.ID = 1 OR b` (a subquery keeps its parens).
+   */
+  private cond(e: N, parent: N): Doc {
+    const sec = this.sections.length;
+    const doc = this.sec("cond", "", () => this.node(e, parent));
+    let label = flat(doc, 140, true);
+    if (e.type === "paren_expr" && !isSubSelect(e.expr)) label = unwrapLabel(label);
+    this.sections[sec].label = label;
+    return doc;
   }
 
   /** WHERE / HAVING / QUALIFY: each AND-ed condition is an item. */
   private conditions(e: N, parent: N): Doc {
     if (e.type !== "binary_expr" || opName(e.operator) !== "AND") {
-      return this.sec("cond", this.snippet(e), () => this.node(e, parent));
+      return this.cond(e, parent);
     }
     const items: N[] = [];
     const ops: N[] = [];
@@ -304,7 +348,7 @@ class Printer {
       } else items.push(x);
     };
     walk(e);
-    const docs = items.map((it) => this.sec("cond", this.snippet(it), () => this.node(it, e)));
+    const docs = items.map((it) => this.cond(it, e));
     return group([pre, docs[0], indent(docs.slice(1).map((d, i) => [line, this.kw(ops[i]), space, d]))]);
   }
 
@@ -446,7 +490,10 @@ class Printer {
         return [this.kw(kwNode), space, this.conditions(n.expr, n)];
       }
       case "group_by_clause":
-        return this.listClause([this.kw(n.groupByKw), n.distinctKw ? [space, this.kw(n.distinctKw)] : []], n.columns, n, true);
+        return [
+          this.listClause([this.kw(n.groupByKw), n.distinctKw ? [space, this.kw(n.distinctKw)] : []], n.columns, n, true),
+          n.withRollupKw ? [space, this.kw(n.withRollupKw)] : [],
+        ];
       case "order_by_clause":
         return this.listClause(this.kw(n.orderByKw), n.specifications, n, parent?.type === "select_stmt");
       case "partition_by_clause":
@@ -609,10 +656,10 @@ class Printer {
     const docs = items.map((it, i) => {
       const id = this.sections.length;
       return this.sec("column", "", () => {
-        const { doc, item } = this.column(it, i, listId, n.columns);
+        const { doc, item, exprDoc } = this.column(it, i, listId, n.columns);
         item.tag = `S${id}`;
         this.sections[id].label = item.outputName;
-        this.sections[id].detail = this.snippet(it.type === "alias" ? it.expr : it);
+        this.sections[id].detail = flat(exprDoc);
         list.items.push(item);
         return doc;
       });
@@ -626,7 +673,7 @@ class Printer {
     return [this.comments(n.columns), head, space, fold(f.id, indent([hardline, body]), body)];
   }
 
-  private column(it: N, index: number, listId: string, listNode: N): { doc: Doc; item: ColumnItem } {
+  private column(it: N, index: number, listId: string, listNode: N): { doc: Doc; item: ColumnItem; exprDoc: Doc } {
     const pre = it.type === "alias" ? this.comments(it) : [];
     const expr = it.type === "alias" ? it.expr : it;
     const alias = it.type === "alias" ? it.alias : null;
@@ -678,13 +725,13 @@ class Printer {
       ref,
       inputs: ref === undefined && inputs.length ? inputs : undefined,
     };
-    return { doc: [pre, doc], item };
+    return { doc: [pre, doc], item, exprDoc };
   }
 
   // ---- FROM / JOIN ----------------------------------------------------------
 
   private tableExpr(e: N, parent: N): Doc {
-    if (e.type !== "join_expr") return this.sec("source", this.factorName(e), () => this.tableFactor(e, parent), { detail: this.snippet(e) });
+    if (e.type !== "join_expr") return this.sec("source", this.factorName(e), () => this.tableFactor(e, parent), { detail: null });
     const joins: N[] = [];
     let cur = e;
     while (cur.type === "join_expr") {
@@ -693,11 +740,11 @@ class Printer {
     }
     const out: Doc[] = [
       joins.map((j) => this.comments(j)),
-      this.sec("source", this.factorName(cur), () => this.tableFactor(cur, e), { detail: this.snippet(cur) }),
+      this.sec("source", this.factorName(cur), () => this.tableFactor(cur, e), { detail: null }),
     ];
     for (const j of joins) {
       const spec = j.specification;
-      const more = { op: j.operator === "," ? "," : opName(j.operator), detail: spec ? this.snippet(spec) : undefined };
+      const more = { op: j.operator === "," ? "," : opName(j.operator) };
       if (j.operator === ",") {
         out.push(text(",", "op"), hardline, this.sec("join", this.factorName(j.right), () => this.tableFactor(j.right, j), more));
         continue;
@@ -707,7 +754,11 @@ class Printer {
         this.sec(
           "join",
           this.factorName(j.right),
-          (): Doc => [this.kw(j.operator), space, this.tableFactor(j.right, j), spec ? group(indent([line, this.node(spec, j)])) : []],
+          (): Doc => {
+            const specDoc = spec ? this.node(spec, j) : null;
+            if (specDoc) this.sections[this.secStack[this.secStack.length - 1]].detail = flat(specDoc);
+            return [this.kw(j.operator), space, this.tableFactor(j.right, j), specDoc ? group(indent([line, specDoc])) : []];
+          },
           more,
         ),
       );
@@ -800,7 +851,7 @@ class Printer {
   }
 
   private listClause(head: Doc, list: N, n: N, items = false): Doc {
-    const docs = list.items.map((x: N) => (items ? this.sec("item", this.snippet(x), () => this.node(x, n)) : this.node(x, n)));
+    const docs = list.items.map((x: N) => (items ? this.sec("item", null, () => this.node(x, n)) : this.node(x, n)));
     return group([head, indent([line, join([text(",", "op"), line], docs)])]);
   }
 

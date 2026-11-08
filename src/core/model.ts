@@ -67,9 +67,10 @@ export const defaultPrintOptions: PrintOptions = {
   columnFoldThreshold: 8,
 };
 
-/** Identity of a name: unquoted, case-insensitive (`"MEASUREMENT_ID"` = `measurement_id`). */
+/** Identity of a name: unquoted, case-insensitive (`"MEASUREMENT_ID"` = `measurement_id`, `` `Id` `` = `id`). */
 export function nameKey(s: string): string {
-  if (s.length >= 2 && s[0] === '"' && s[s.length - 1] === '"') s = s.slice(1, -1).replace(/""/g, '"');
+  const q = s[0];
+  if (s.length >= 2 && (q === '"' || q === "`") && s[s.length - 1] === q) s = s.slice(1, -1).replaceAll(q + q, q);
   return s.toLowerCase();
 }
 
@@ -178,7 +179,15 @@ export interface PrintResult {
   ctes: Record<string, string>;
 }
 
+/** Dialects the parser is run in. Snowflake is parsed as `postgresql`. */
+export type Dialect = "postgresql" | "mysql";
+/** The dialect setting: a fixed dialect, or `auto` (Postgres, falling back to MySQL). */
+export type DialectChoice = Dialect | "auto";
+export const dialectNames: Record<Dialect, string> = { postgresql: "PostgreSQL", mysql: "MySQL" };
+
 export interface ParseError {
+  /** Dialect of the reported error (with `auto`, the one whose parse got furthest). */
+  dialect?: Dialect;
   message: string;
   line: number;
   col: number;

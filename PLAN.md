@@ -1,6 +1,6 @@
 # sql-snob: SQL viewer plan
 
-The goal is a read-only, browser-only SQL viewer. Paste SQL and it is formatted, with subqueries, CTEs and long SELECT lists folded under readable names. You can drill into any branch of the query, including column lists. Target dialects are Postgres and Snowflake; Snowflake is parsed in `postgresql` mode.
+The goal is a read-only, browser-only SQL viewer. Paste SQL and it is formatted, with subqueries, CTEs and long SELECT lists folded under readable names. You can drill into any branch of the query, including column lists. Target dialects are Postgres, Snowflake and MySQL; Snowflake is parsed in `postgresql` mode. The dialect is picked in the status bar; the default, Auto, tries `postgresql` and falls back to `mysql`.
 
 ## Stack
 

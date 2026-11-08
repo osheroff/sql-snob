@@ -164,7 +164,7 @@ function placeCaret(ev: MouseEvent) {
   const line = Math.floor((ev.clientY - r.top) / LINE_H);
   const x = ev.clientX - r.left - GUTTER_PX;
   if (x < 0 || line < 0 || line >= lines.value.length) return;
-  setCaretAt(line, Math.round(x / charW.value));
+  setCaretAt(line, Math.round(x / charW.value), false, true);
   el.value?.focus({ preventScroll: true });
 }
 
@@ -330,7 +330,8 @@ function chipTitle(id: string): string {
 .hov {
   background: var(--hl);
 }
-.same-id {
+/* Usages of the identifier under the caret: only while the SQL view has the focus. */
+.sqlview:focus-within .same-id {
   background: var(--same-id);
   box-shadow: 0 0 0 1px var(--same-id-border);
   border-radius: 2px;

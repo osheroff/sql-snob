@@ -16,6 +16,7 @@ import {
   state,
   toggleOutline,
 } from "./state/store";
+import DialectPicker from "./ui/DialectPicker.vue";
 import Sidebar from "./ui/Sidebar.vue";
 import ParseErrorView from "./ui/ParseErrorView.vue";
 import PasteBox from "./ui/PasteBox.vue";
@@ -107,7 +108,7 @@ function onOpt() {
     </div>
     <footer class="status">
       <span>{{ position }}</span>
-      <span class="muted">PostgreSQL syntax</span>
+      <DialectPicker />
     </footer>
     <div v-if="showHelp" class="help" @click="showHelp = false">
       <div class="help-card" @click.stop>

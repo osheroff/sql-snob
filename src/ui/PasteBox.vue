@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { nextTick, ref } from "vue";
+import { ref } from "vue";
 import example from "../examples/measurements.sql?raw";
 import { load, state } from "../state/store";
 
@@ -9,8 +9,11 @@ const dragging = ref(false);
 function submit() {
   if (text.value.trim()) load(text.value);
 }
-async function onPaste() {
-  await nextTick();
+// Submit on the `input` a paste produces: the `paste` event fires before the text is inserted
+// (and before microtasks such as nextTick resolve), so the textarea would still hold the old SQL.
+function onInput(ev: Event) {
+  if ((ev as InputEvent).inputType !== "insertFromPaste") return;
+  text.value = (ev.target as HTMLTextAreaElement).value;
   submit();
 }
 async function onDrop(ev: DragEvent) {
@@ -35,7 +38,7 @@ function loadExample() {
       autofocus
       spellcheck="false"
       placeholder="Paste SQL here (or drop a .sql file)…"
-      @paste="onPaste"
+      @input="onInput"
       @keydown.meta.enter="submit"
       @keydown.ctrl.enter="submit"
     />

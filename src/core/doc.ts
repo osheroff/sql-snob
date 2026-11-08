@@ -85,3 +85,36 @@ export function eachFold(doc: Doc, fn: (f: Fold) => void): void {
     }
   }
 }
+
+/**
+ * One-line text of a doc as printed flat (open folds, no comments), for outline labels.
+ * Cut at `max` characters with an ellipsis. `unquote` drops identifier quotes (`"Name"` -> `Name`).
+ */
+export function flat(doc: Doc, max = 140, unquote = false): string {
+  let out = "";
+  const stack: Doc[] = [doc];
+  while (stack.length && out.length <= max) {
+    const d = stack.pop()!;
+    if (Array.isArray(d)) {
+      for (let i = d.length - 1; i >= 0; i--) stack.push(d[i]);
+    } else if (d.t === "s") {
+      if (d.k === "id" && unquote) out += unquoteIdent(d.s);
+      else if (d.k !== "com") out += d.s;
+    } else if (d.t === "l") {
+      if (d.m !== 1) out += " ";
+    } else if (d.t === "F") {
+      for (let i = d.c.length - 1; i >= 0; i--) stack.push(d.c[i]);
+    } else {
+      stack.push(d.c);
+    }
+  }
+  out = out.replace(/\s+/g, " ").trim();
+  return out.length > max ? out.slice(0, max) + " …" : out;
+}
+
+/** `"Name"` -> `Name`, `` `a``b` `` -> `` a`b ``; anything else unchanged. */
+export function unquoteIdent(s: string): string {
+  const q = s[0];
+  if (s.length < 2 || (q !== '"' && q !== "`") || s[s.length - 1] !== q) return s;
+  return s.slice(1, -1).replaceAll(q + q, q);
+}
