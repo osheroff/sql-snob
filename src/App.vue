@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from "vue";
+import { computed, ref, watch } from "vue";
 import {
   caretPos,
   collapseAll,
@@ -25,6 +25,13 @@ import SqlView from "./ui/SqlView.vue";
 
 const showOpts = ref(false);
 const showHelp = ref(false);
+// The popup flags live here, not in the viewer, so close them when leaving it (New query…).
+watch(
+  () => state.status,
+  (s) => {
+    if (s !== "ready") showOpts.value = showHelp.value = false;
+  },
+);
 
 const position = computed(() => {
   const n = mainLayout.value?.lines.length ?? 0;
