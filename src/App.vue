@@ -105,7 +105,7 @@ openRoute();
     <Sidebar v-if="state.outlineOpen" class="outline" />
     <div class="main">
       <div class="tools">
-        <button class="btn icon" :title="state.outlineOpen ? 'Hide sidebar' : 'Show sidebar'" @click="toggleOutline">{{ state.outlineOpen ? "«" : "»" }}</button>
+        <button class="btn icon sidebar-toggle" :title="state.outlineOpen ? 'Hide sidebar' : 'Show sidebar'" @click="toggleOutline">{{ state.outlineOpen ? "«" : "»" }}</button>
         <QueryPath class="qpath" />
         <button
           class="btn"
@@ -259,11 +259,14 @@ dl { display: grid; grid-template-columns: 9em 1fr; gap: 4px 12px; margin: 0 0 1
 dt { font-family: var(--mono); color: var(--accent); }
 dd { margin: 0; }
 @media (max-width: 800px) {
-  .app {
+  /* No sidebar on narrow screens, open or closed (`.outline-closed` must be overridden too). */
+  .app,
+  .app.outline-closed {
     grid-template-columns: minmax(0, 1fr);
     grid-template-rows: minmax(0, 1fr) auto;
     grid-template-areas: "main" "status";
   }
-  .outline { display: none; }
+  .outline,
+  .sidebar-toggle { display: none; }
 }
 </style>
