@@ -15,6 +15,7 @@ import {
   type PrintResult,
 } from "../core/model";
 import type { Request, Response } from "../worker/protocol";
+import { openShared } from "./share";
 
 const OUTLINE_KEY = "sql-snob:sidebar";
 const DIALECT_KEY = "sql-snob:dialect";
@@ -334,8 +335,32 @@ export async function submitQuery(sql: string): Promise<void> {
   await load(sql);
 }
 
+/**
+ * A shared link, `/s/<id>#<key>`: fetch and decrypt the query, then make it an ordinary saved query
+ * (`/q/<id>`, replacing the shared URL so the key leaves the address bar and history).
+ */
+async function openSharedRoute(shareId: string): Promise<void> {
+  state.status = "loading";
+  state.restoring = true; // no paste box while it downloads
+  let sql: string;
+  try {
+    sql = await openShared(shareId, location.hash.slice(1));
+  } catch {
+    history.replaceState(null, "", "/");
+    showPasteBox("That shared link has expired, or it's incomplete (the part after # is the key).");
+    return;
+  }
+  const id = await queryIdOf(sql);
+  saveQuery(id, sql);
+  state.queryId = id;
+  history.replaceState(null, "", `/q/${id}`);
+  await load(sql, true);
+}
+
 /** Show what the URL says: the paste box, or a saved query (at startup and on back/forward). */
 export function openRoute(): void {
+  const shared = /^\/s\/([A-Za-z0-9]{10})\/?$/.exec(location.pathname)?.[1];
+  if (shared) return void openSharedRoute(shared);
   const id = routeId();
   if (!id) {
     if (location.pathname !== "/") history.replaceState(null, "", "/");

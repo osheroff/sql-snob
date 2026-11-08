@@ -16,6 +16,7 @@ import {
   state,
   toggleOutline,
 } from "./state/store";
+import { shareQuery } from "./state/share";
 import DialectPicker from "./ui/DialectPicker.vue";
 import Sidebar from "./ui/Sidebar.vue";
 import ParseErrorView from "./ui/ParseErrorView.vue";
@@ -68,6 +69,20 @@ async function copy() {
   setTimeout(() => (copied.value = false), 1200);
 }
 
+/** Upload an encrypted copy and put its link on the clipboard. */
+const shareMsg = ref<string | null>(null);
+async function share() {
+  shareMsg.value = "Sharing…";
+  try {
+    const link = await shareQuery(state.sql);
+    await navigator.clipboard.writeText(link);
+    shareMsg.value = "Link copied";
+  } catch (e) {
+    shareMsg.value = e instanceof Error && e.message.startsWith("That") ? e.message : "Sharing failed";
+  }
+  setTimeout(() => (shareMsg.value = null), 2500);
+}
+
 function editSql() {
   reset();
 }
@@ -117,6 +132,12 @@ openRoute();
         <button class="btn" title="Copy the SQL of the query around the cursor, fully expanded" @click="copy">
           {{ copied ? "Copied" : "Copy SQL" }}
         </button>
+        <button
+          class="btn"
+          title="Copy a link to this query. An encrypted copy is uploaded; the key is only in the link, so only people with the link can read it. Links expire after 90 days."
+          :disabled="shareMsg === 'Sharing…'"
+          @click="share"
+        >{{ shareMsg ?? "Share" }}</button>
         <button class="btn" title="Expand everything in view" @click="expandAll">Expand all</button>
         <button class="btn" title="Collapse everything in view" @click="collapseAll">Collapse all</button>
         <div class="opts-wrap" @mouseleave="closeOptsSoon" @mouseenter="keepOpts">
