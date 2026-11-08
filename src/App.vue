@@ -25,6 +25,16 @@ import SqlView from "./ui/SqlView.vue";
 
 const showOpts = ref(false);
 const showHelp = ref(false);
+// Options closes when the mouse leaves it (and its button), after a grace period.
+let optsTimer = 0;
+function closeOptsSoon() {
+  clearTimeout(optsTimer);
+  optsTimer = window.setTimeout(() => (showOpts.value = false), 400);
+}
+function keepOpts() {
+  clearTimeout(optsTimer);
+}
+
 // The popup flags live here, not in the viewer, so close them when leaving it (New query…).
 watch(
   () => state.status,
@@ -97,19 +107,15 @@ function onOpt() {
         </button>
         <button class="btn" title="Expand everything in view" @click="expandAll">Expand all</button>
         <button class="btn" title="Collapse everything in view" @click="collapseAll">Collapse all</button>
-        <div class="opts-wrap">
+        <div class="opts-wrap" @mouseleave="closeOptsSoon" @mouseenter="keepOpts">
           <button class="btn" @click="showOpts = !showOpts">Options</button>
-          <div v-if="showOpts" class="opts" @mouseleave="showOpts = false">
+          <!-- The zone's transparent padding is a margin of error around the panel for the mouse. -->
+          <div v-if="showOpts" class="opts-zone"><div class="opts">
             <label><input v-model="state.opts.removeParens" type="checkbox" @change="onOpt" /> Remove redundant parentheses</label>
             <label><input v-model="state.opts.hideObviousCasts" type="checkbox" @change="onOpt" /> Hide obvious casts (<code>'x'::TEXT</code>)</label>
             <label><input v-model="state.opts.collapseAliases" type="checkbox" @change="onOpt" /> Collapse <code>"X" AS "X"</code></label>
-            <label>
-              Fold SELECT lists with ≥
-              <input v-model.number="state.opts.columnFoldThreshold" type="number" min="1" max="999" class="num" @change="onOpt" />
-              columns
-            </label>
             <button class="btn new" @click="reset">New query…</button>
-          </div>
+          </div></div>
         </div>
         <button class="btn" title="Help" @click="showHelp = !showHelp">?</button>
       </div>
@@ -190,22 +196,24 @@ function onOpt() {
   align-self: flex-start;
 }
 .opts-wrap { position: relative; }
-.opts {
+.opts-zone {
   position: absolute;
-  right: 0;
-  top: calc(100% + 4px);
+  right: -16px;
+  top: 100%;
   z-index: 10;
+  padding: 4px 16px 16px;
+}
+.opts {
   background: var(--panel-bg);
   border: 1px solid var(--border);
   border-radius: 8px;
-  padding: 10px 12px;
+  padding: 14px 16px;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 10px;
   white-space: nowrap;
   box-shadow: 0 8px 24px var(--shadow);
 }
-.num { width: 4em; }
 .outline { grid-area: outline; }
 .status {
   grid-area: status;
