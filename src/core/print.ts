@@ -331,24 +331,40 @@ class Printer {
     return doc;
   }
 
-  /** WHERE / HAVING / QUALIFY: each AND-ed condition is an item. */
+  /**
+   * WHERE / HAVING / QUALIFY: each AND-ed condition is an item. With redundant parens removed, the
+   * chain is flattened through them too: `a AND ((b AND c))` is three items, as the SQL view shows it.
+   */
   private conditions(e: N, parent: N): Doc {
-    if (e.type !== "binary_expr" || opName(e.operator) !== "AND") {
-      return this.cond(e, parent);
-    }
+    const pre: Doc[] = [];
+    /** `x` as an AND node, looking through parens that the printer would drop; else null. */
+    const asAnd = (x: N): N | null => {
+      const parens: N[] = [];
+      if (this.opts.removeParens) {
+        while (x.type === "paren_expr" && !isSubSelect(x.expr)) {
+          parens.push(x);
+          x = x.expr;
+        }
+      }
+      if (x.type !== "binary_expr" || opName(x.operator) !== "AND") return null;
+      for (const p of parens) pre.push(this.comments(p)); // dropped parens: keep their comments
+      return x;
+    };
+    const root = asAnd(e);
+    if (!root) return [pre, this.cond(e, parent)];
     const items: N[] = [];
     const ops: N[] = [];
-    const pre: Doc[] = [];
     const walk = (x: N) => {
-      if (x.type === "binary_expr" && opName(x.operator) === "AND") {
-        pre.push(this.comments(x));
-        walk(x.left);
-        ops.push(x.operator);
-        walk(x.right);
+      const and = asAnd(x);
+      if (and) {
+        pre.push(this.comments(and));
+        walk(and.left);
+        ops.push(and.operator);
+        walk(and.right);
       } else items.push(x);
     };
-    walk(e);
-    const docs = items.map((it) => this.cond(it, e));
+    walk(root);
+    const docs = items.map((it) => this.cond(it, root));
     return group([pre, docs[0], indent(docs.slice(1).map((d, i) => [line, this.kw(ops[i]), space, d]))]);
   }
 
