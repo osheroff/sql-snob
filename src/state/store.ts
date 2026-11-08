@@ -16,10 +16,7 @@ import {
 } from "../core/model";
 import type { Request, Response } from "../worker/protocol";
 
-const SQL_KEY = "sql-snob:sql";
 const OUTLINE_KEY = "sql-snob:sidebar";
-/** Set while a query is being viewed, so a page reload goes back to the viewer, not the paste box. */
-const VIEWING_KEY = "sql-snob:viewing";
 const DIALECT_KEY = "sql-snob:dialect";
 
 function readDialectPref(): DialectChoice {
@@ -82,6 +79,10 @@ function call(req: DistributiveOmit<Request, "id">): Promise<Response> {
 export const state = reactive({
   sql: "",
   status: "empty" as "empty" | "loading" | "ready" | "error",
+  /** Id (content hash) of the query in the URL, `/q/<id>`; null on the paste box. */
+  queryId: null as string | null,
+  /** Shown on the paste box, e.g. when a `/q/<id>` link's query isn't saved in this browser. */
+  notice: null as string | null,
   /** Loading a query that was already being viewed (page reload, dialect change), not one from the paste box. */
   restoring: false,
   error: null as ParseError | null,
@@ -144,18 +145,16 @@ export function label(id: string): string {
 
 // ---- loading ------------------------------------------------------------------
 
-/** Load a query. `restore` keeps the URL hash (page reload of the same query). */
+/**
+ * Parse and show a query. The URL is the caller's job (see `submitQuery`, `openRoute`); its hash
+ * (focus, folds, caret) is applied once the query is parsed. `restore`: re-showing a query that was
+ * already being viewed (reload, dialect change), so don't flash the paste box meanwhile.
+ */
 export async function load(sql: string, restore = false): Promise<void> {
-  if (!restore) history.replaceState(null, "", location.pathname);
   state.sql = sql;
   state.status = "loading";
   state.restoring = restore;
-  try {
-    sessionStorage.setItem(SQL_KEY, sql);
-    sessionStorage.setItem(VIEWING_KEY, "1");
-  } catch {
-    /* storage unavailable */
-  }
+  state.notice = null;
   const res = await call({ type: "load", sql, dialect: state.dialect, opts: { ...state.opts } });
   if (!res.ok) {
     state.status = "error";
@@ -198,24 +197,164 @@ function setResult(r: PrintResult, ms: { parse: number; print: number }) {
   state.error = null;
 }
 
+/** Back to the paste box (keeping the current SQL in it), as a new history entry. */
 export function reset(): void {
+  showPasteBox();
+  history.pushState(null, "", "/");
+}
+
+function showPasteBox(notice: string | null = null) {
+  state.status = "empty";
+  state.queryId = null;
+  state.notice = notice;
+  result.value = null;
+}
+
+// ---- saved queries & routes: `/` is the paste box, `/q/<id>` a query ---------------
+// Queries are saved in localStorage under a hash of their text, so `/q/<id>` survives reloads and
+// works in other tabs (of this browser: nothing leaves it). Only the most recent few are kept.
+
+const QUERY_PREFIX = "sql-snob:q:";
+const RECENT_KEY = "sql-snob:recent";
+const KEEP_QUERIES = 20;
+
+/** Content id of a query: the first 12 hex digits of its SHA-256. */
+async function queryIdOf(sql: string): Promise<string> {
+  const data = new TextEncoder().encode(sql);
+  if (crypto.subtle) {
+    const buf = await crypto.subtle.digest("SHA-256", data);
+    return [...new Uint8Array(buf, 0, 6)].map((b) => b.toString(16).padStart(2, "0")).join("");
+  }
+  // No WebCrypto outside secure contexts (e.g. the dev server over plain http on a LAN): FNV-1a.
+  let h1 = 0x811c9dc5;
+  let h2 = 0x01000193;
+  for (const b of data) {
+    h1 = Math.imul(h1 ^ b, 0x01000193);
+    h2 = Math.imul(h2 ^ b, 0x5bd1e995);
+  }
+  return ((h1 >>> 0).toString(16).padStart(8, "0") + (h2 >>> 0).toString(16).padStart(8, "0")).slice(0, 12);
+}
+
+/** Saved queries, most recent first: `{ id, at }` (`at`: when last viewed, ms since epoch). */
+interface RecentEntry {
+  id: string;
+  at: number;
+}
+
+function readRecent(): RecentEntry[] {
   try {
-    sessionStorage.removeItem(VIEWING_KEY);
+    const v = JSON.parse(localStorage.getItem(RECENT_KEY) ?? "[]");
+    if (!Array.isArray(v)) return [];
+    return v
+      .map((x) => (typeof x === "string" ? { id: x, at: 0 } : x)) // bare ids: the first version of this list
+      .filter((x): x is RecentEntry => typeof x?.id === "string" && typeof x?.at === "number");
+  } catch {
+    return [];
+  }
+}
+
+function writeRecent(list: RecentEntry[]): void {
+  try {
+    localStorage.setItem(RECENT_KEY, JSON.stringify(list));
   } catch {
     /* storage unavailable */
   }
-  state.status = "empty";
-  result.value = null;
-  history.pushState(null, "", location.pathname);
 }
 
-/** The last query, and whether it was being viewed when the page was left. */
-export function restoreSession(): { sql: string; viewing: boolean } {
+/** Save a query (most recent first), dropping the oldest ones to stay within KEEP_QUERIES and the quota. */
+function saveQuery(id: string, sql: string): void {
   try {
-    return { sql: sessionStorage.getItem(SQL_KEY) ?? "", viewing: sessionStorage.getItem(VIEWING_KEY) === "1" };
+    const list = [{ id, at: Date.now() }, ...readRecent().filter((x) => x.id !== id)];
+    for (;;) {
+      try {
+        localStorage.setItem(QUERY_PREFIX + id, sql);
+        break;
+      } catch {
+        // Full: drop the oldest other query and retry; give up when there's nothing left to drop.
+        if (list.length <= 1) return;
+        localStorage.removeItem(QUERY_PREFIX + list.pop()!.id);
+      }
+    }
+    for (const old of list.splice(KEEP_QUERIES)) localStorage.removeItem(QUERY_PREFIX + old.id);
+    writeRecent(list);
   } catch {
-    return { sql: "", viewing: false };
+    /* storage unavailable: the query still shows, but its link won't survive a reload */
   }
+}
+
+export interface SavedQuery {
+  id: string;
+  /** When it was last viewed (ms since epoch; 0 if unknown). */
+  at: number;
+  sql: string;
+}
+
+/** The saved queries, most recent first. */
+export function savedQueries(): SavedQuery[] {
+  return readRecent().flatMap(({ id, at }) => {
+    const sql = savedQuery(id);
+    return sql === null ? [] : [{ id, at, sql }];
+  });
+}
+
+/** Remove a saved query. */
+export function forgetQuery(id: string): void {
+  try {
+    localStorage.removeItem(QUERY_PREFIX + id);
+  } catch {
+    /* storage unavailable */
+  }
+  writeRecent(readRecent().filter((x) => x.id !== id));
+}
+
+/** Open a saved query (a new history entry). */
+export function openQuery(id: string): void {
+  history.pushState(null, "", `/q/${id}`);
+  openRoute();
+}
+
+function savedQuery(id: string): string | null {
+  try {
+    return localStorage.getItem(QUERY_PREFIX + id);
+  } catch {
+    return null;
+  }
+}
+
+function routeId(): string | null {
+  return /^\/q\/([0-9a-f]{12})\/?$/.exec(location.pathname)?.[1] ?? null;
+}
+
+/** View SQL from the paste box: save it, and go to its `/q/<id>` URL (a new history entry). */
+export async function submitQuery(sql: string): Promise<void> {
+  const id = await queryIdOf(sql);
+  saveQuery(id, sql);
+  state.queryId = id;
+  history.pushState(null, "", `/q/${id}`);
+  await load(sql);
+}
+
+/** Show what the URL says: the paste box, or a saved query (at startup and on back/forward). */
+export function openRoute(): void {
+  const id = routeId();
+  if (!id) {
+    if (location.pathname !== "/") history.replaceState(null, "", "/");
+    showPasteBox();
+    return;
+  }
+  if (id === state.queryId && (state.status === "ready" || state.status === "loading")) {
+    if (state.status === "ready") applyHash(); // same query: only the view state changed
+    return;
+  }
+  const sql = savedQuery(id);
+  if (sql === null) {
+    history.replaceState(null, "", "/");
+    showPasteBox("That query isn't saved in this browser. Queries never leave your browser, so links only work where they were pasted.");
+    return;
+  }
+  state.queryId = id;
+  writeRecent([{ id, at: Date.now() }, ...readRecent().filter((x) => x.id !== id)]); // most recent first
+  load(sql, true);
 }
 
 // ---- layout -------------------------------------------------------------------
@@ -661,7 +800,8 @@ function flushHash(push: boolean) {
   // The caret as a position in the layout, which the focus and collapsed folds above determine.
   const at = caretPos.value;
   if (at) p.set("p", `${at.line + 1}.${at.col + 1}`);
-  const url = `${location.pathname}#${p.toString().replace(/%2C/g, ",")}`;
+  const hash = p.toString().replace(/%2C/g, ",");
+  const url = location.pathname + (hash ? `#${hash}` : "");
   if (url === location.pathname + location.hash) return;
   if (push) history.pushState(null, "", url);
   else history.replaceState(null, "", url);
@@ -690,9 +830,7 @@ export function applyHash(initial = false): void {
   if (initial) flushHash(false);
 }
 
-window.addEventListener("popstate", () => {
-  if (state.status === "ready") applyHash();
-});
+window.addEventListener("popstate", openRoute);
 
 /** Formatted SQL of one section (e.g. a subquery), fully expanded and dedented. */
 export function copySectionText(id: number): string {

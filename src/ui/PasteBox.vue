@@ -1,13 +1,15 @@
 <script setup lang="ts">
 import { ref } from "vue";
 import example from "../examples/measurements.sql?raw";
-import { load, state } from "../state/store";
+import { savedQueries, state, submitQuery } from "../state/store";
+import RecentQueries from "./RecentQueries.vue";
 
 const text = ref(state.sql);
 const dragging = ref(false);
+const hasRecent = ref(savedQueries().length > 0);
 
 function submit() {
-  if (text.value.trim()) load(text.value);
+  if (text.value.trim()) submitQuery(text.value);
 }
 async function onDrop(ev: DragEvent) {
   dragging.value = false;
@@ -22,9 +24,11 @@ function loadExample() {
 </script>
 
 <template>
+  <div class="home" :class="{ 'has-recent': hasRecent }">
   <div class="paste" :class="{ dragging }" @dragover.prevent="dragging = true" @dragleave="dragging = false" @drop.prevent="onDrop">
     <h1>sql-snob</h1>
     <p class="sub">Paste a query. It's formatted, folded and navigable. Nothing leaves your browser.</p>
+    <p v-if="state.notice" class="notice">{{ state.notice }}</p>
     <textarea
       v-model="text"
       autofocus
@@ -42,20 +46,54 @@ function loadExample() {
       <button class="btn link" @click="loadExample">Try an example</button>
     </div>
   </div>
+  <RecentQueries v-if="hasRecent" class="side" @empty="hasRecent = false" />
+  </div>
 </template>
 
 <style scoped>
-.paste {
+.home {
   max-width: 1100px;
   margin: 0 auto;
-  padding: 48px 16px 24px;
   height: 100%;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+}
+.home.has-recent {
+  max-width: 1420px;
+  grid-template-columns: minmax(0, 1fr) 300px;
+  gap: 8px;
+}
+.paste {
+  padding: 48px 16px 24px;
+  min-height: 0;
   display: flex;
   flex-direction: column;
   gap: 12px;
 }
+/* Recent queries: aligned with the textarea, below the heading. */
+.side {
+  padding: 120px 16px 24px 0;
+  min-height: 0;
+}
+@media (max-width: 800px) {
+  .home.has-recent {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(400px, 1fr) auto;
+    height: auto;
+    min-height: 100%;
+  }
+  .side { padding: 0 16px 24px; }
+}
 h1 { margin: 0; font-size: 28px; letter-spacing: -0.02em; }
 .sub { margin: 0; color: var(--muted); }
+.notice {
+  margin: 0;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: 6px;
+  background: var(--panel-bg);
+}
 textarea {
   flex: 1;
   min-height: 300px;

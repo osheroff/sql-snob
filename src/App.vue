@@ -5,12 +5,11 @@ import {
   collapseAll,
   copySectionText,
   expandAll,
-  load,
   localOutline,
   mainLayout,
   reprint,
   reset,
-  restoreSession,
+  openRoute,
   result,
   setFocus,
   state,
@@ -76,12 +75,8 @@ function onOpt() {
   reprint();
 }
 
-// Restore the last query before child components read `state.sql`.
-{
-  const saved = restoreSession();
-  if (saved.sql && saved.viewing) load(saved.sql, true);
-  else state.sql = saved.sql;
-}
+// Show what the URL says (paste box or `/q/<id>`) before child components read `state.sql`.
+openRoute();
 </script>
 
 <template>
