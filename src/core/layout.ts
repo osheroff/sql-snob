@@ -154,7 +154,7 @@ export function layout(doc: Doc, ctx: LayoutCtx, rootFold: string | null = null)
             tagCol.set(tg, col);
             tagLine.set(tg, lines.length);
           }
-          col += s.length + 2; // chip is drawn as `▸ label`
+          col += s.length + 2; // chip is drawn as ` label ` (its ▸ is in the gutter)
         }
         break;
       }
@@ -223,7 +223,7 @@ function leadWidth(sep: Doc | undefined): number {
   return d && d.t === "s" ? d.s.length : 0;
 }
 
-/** Width of a token on screen, in columns (a fold chip is `▸ label`). */
+/** Width of a token on screen, in columns (a fold chip is ` label `, padded). */
 export function tokenWidth(t: Token): number {
   return t.k === "fold" ? t.s.length + 2 : t.s.length;
 }

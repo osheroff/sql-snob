@@ -20,6 +20,8 @@ import {
 const LINE_H = 20;
 const GUTTER_PX = 20;
 const BUFFER = 30;
+/** Indentation is drawn narrower than the text grid: each indent column is this fraction of a character. */
+const INDENT_SCALE = 0.75;
 /** Empty space below the last line. */
 const BOTTOM_PAD = 30;
 
@@ -70,6 +72,17 @@ function measure() {
   probe.remove();
 }
 
+/** Pixels from the start of the code to column `col` of a line (its indent is drawn narrower). */
+function colX(line: number, col: number): number {
+  const ind = lines.value[line]?.indent ?? 0;
+  return (Math.min(col, ind) * INDENT_SCALE + Math.max(0, col - ind)) * charW.value;
+}
+/** Column at `x` pixels from the start of the code (inverse of colX). */
+function xCol(line: number, x: number): number {
+  const indPx = (lines.value[line]?.indent ?? 0) * INDENT_SCALE * charW.value;
+  return x < indPx ? Math.round(x / (INDENT_SCALE * charW.value)) : (lines.value[line]?.indent ?? 0) + Math.round((x - indPx) / charW.value);
+}
+
 let ro: ResizeObserver | undefined;
 let resizeTimer: number | undefined;
 function fitWidth() {
@@ -109,7 +122,7 @@ function scrollIntoView(line: number, col?: number, center = false) {
     e.scrollTop = top - e.clientHeight + LINE_H * 2;
   }
   if (col !== undefined) {
-    const x = GUTTER_PX + col * charW.value;
+    const x = GUTTER_PX + colX(line, col);
     if (x < e.scrollLeft + GUTTER_PX) e.scrollLeft = Math.max(0, x - GUTTER_PX - 40);
     else if (x > e.scrollLeft + e.clientWidth - 20) e.scrollLeft = x - e.clientWidth + 60;
   }
@@ -166,7 +179,7 @@ function placeCaret(ev: MouseEvent) {
   const line = Math.floor((ev.clientY - r.top) / LINE_H);
   const x = ev.clientX - r.left - GUTTER_PX;
   if (x < 0 || line < 0 || line >= lines.value.length) return;
-  setCaretAt(line, Math.round(x / charW.value), false, true);
+  setCaretAt(line, xCol(line, x), false, true);
   el.value?.focus({ preventScroll: true });
 }
 
@@ -190,9 +203,9 @@ function onKey(ev: KeyboardEvent) {
   ev.preventDefault();
 }
 
-/** A collapsed column list on this line: its toggle goes in the gutter. */
-function closedCols(l: { tokens: { k: string; fold?: string }[] }): string | undefined {
-  return l.tokens.find((t) => t.k === "fold" && t.fold && folds.value[t.fold]?.kind === "columns")?.fold;
+/** The first collapsed fold on this line: its expand toggle goes in the gutter (never inline). */
+function closedFold(l: { tokens: { k: string; fold?: string }[] }): string | undefined {
+  return l.tokens.find((t) => t.k === "fold" && t.fold)?.fold;
 }
 
 function chipTitle(id: string): string {
@@ -218,15 +231,15 @@ function chipTitle(id: string): string {
         >
           <span class="gutter">
             <button v-if="l.opens" class="g-btn" :data-toggle="l.opens[0]" :title="`Collapse ${folds[l.opens[0]]?.name}`">▾</button>
-            <button v-else-if="closedCols(l)" class="g-btn" :data-toggle="closedCols(l)" :title="`Expand ${folds[closedCols(l)!]?.name}`">▸</button>
+            <button v-else-if="closedFold(l)" class="g-btn" :data-toggle="closedFold(l)" :title="`Expand ${folds[closedFold(l)!]?.name}`">▸</button>
           </span>
-          <span class="code" :style="{ paddingLeft: l.indent * charW + 'px' }"><template v-for="(t, i) in l.tokens" :key="i"><span
+          <span class="code" :style="{ paddingLeft: l.indent * INDENT_SCALE * charW + 'px' }"><template v-for="(t, i) in l.tokens" :key="i"><span
                 v-if="t.k === 'fold'"
                 class="chip"
                 :class="[folds[t.fold!]?.kind, { cur: t.fold === state.cursor, 'cur-sec': t.tag && curTags.has(t.tag), hov: t.tag && hoverTags.has(t.tag) }]"
                 :data-fold="t.fold"
                 :title="chipTitle(t.fold!)"
-              ><template v-if="folds[t.fold!]?.kind === 'columns'">{{ "\u00a0" + t.s + "\u00a0" }}</template><template v-else><span class="tri">▸</span> {{ t.s }}</template></span><span
+              >{{ "\u00a0" + t.s + "\u00a0" }}</span><span
                 v-else
                 :class="['t-' + t.k, { 'cur-sec': t.tag && curTags.has(t.tag), hov: t.tag && hoverTags.has(t.tag), 'same-id': sameIdent(t) }]"
               >{{ t.s }}</span></template></span>
@@ -235,7 +248,7 @@ function chipTitle(id: string): string {
       <div
         v-if="caretPos"
         class="caret"
-        :style="{ top: caretPos.line * LINE_H + 2 + 'px', left: GUTTER_PX + caretPos.col * charW - 1 + 'px' }"
+        :style="{ top: caretPos.line * LINE_H + 2 + 'px', left: GUTTER_PX + colX(caretPos.line, caretPos.col) - 1 + 'px' }"
       />
     </div>
   </div>
@@ -310,11 +323,6 @@ function chipTitle(id: string): string {
   color: var(--chip-fg);
   box-shadow: inset 0 0 0 1px var(--chip-border);
   cursor: pointer;
-}
-.chip .tri {
-  display: inline-block;
-  width: 1ch;
-  text-align: center;
 }
 .chip:hover {
   box-shadow: inset 0 0 0 1px var(--accent);

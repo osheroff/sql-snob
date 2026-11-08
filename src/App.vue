@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { computed, ref, watch, watchEffect } from "vue";
 import {
+  canCollapseAll,
+  canExpandAll,
   caretPos,
   collapseAll,
   copySectionText,
@@ -126,7 +128,7 @@ openRoute();
           class="btn"
           :class="{ on: state.focus }"
           :disabled="!state.focus && !curFold"
-          :title="state.focus ? 'Show the whole SQL again' : 'Show only the query around the cursor'"
+          :title="state.focus ? 'Show the whole SQL again' : curFold ? `Focus on ${folds[curFold]?.name}` : 'Show only the query around the cursor'"
           @click="toggleFocus"
         >{{ state.focus ? "Unfocus" : "Focus" }}</button>
         <button class="btn" title="Copy the SQL of the query around the cursor, fully expanded" @click="copy">
@@ -134,12 +136,12 @@ openRoute();
         </button>
         <button
           class="btn"
-          title="Copy a link to this query. An encrypted copy is uploaded; the key is only in the link, so only people with the link can read it. Links expire after 90 days."
+          title="An encrypted copy will be sent to the server"
           :disabled="shareMsg === 'Sharing…'"
           @click="share"
         >{{ shareMsg ?? "Share" }}</button>
-        <button class="btn" title="Expand everything in view" @click="expandAll">Expand all</button>
-        <button class="btn" title="Collapse everything in view" @click="collapseAll">Collapse all</button>
+        <button class="btn" title="Expand everything in view" :disabled="!canExpandAll" @click="expandAll">Expand all</button>
+        <button class="btn" title="Collapse everything in view" :disabled="!canCollapseAll" @click="collapseAll">Collapse all</button>
         <div class="opts-wrap" @mouseleave="closeOptsSoon" @mouseenter="keepOpts">
           <button class="btn" @click="showOpts = !showOpts">Options</button>
           <!-- The zone's transparent padding is a margin of error around the panel for the mouse. -->

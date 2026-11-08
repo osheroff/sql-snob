@@ -452,6 +452,12 @@ export function collapseAll(): void {
   setOpen((s) => ids.forEach((d) => !folds.value[d].defaultOpen && s.delete(d)));
 }
 
+/** Would Expand all / Collapse all change anything (in the current focus)? */
+export const canExpandAll = computed(() => descendants(state.focus).some((d) => !openSet.value.has(d)));
+export const canCollapseAll = computed(() =>
+  descendants(state.focus).some((d) => !folds.value[d].defaultOpen && openSet.value.has(d)),
+);
+
 /** Ancestors of a fold, nearest first. */
 export function ancestors(id: string): string[] {
   const out: string[] = [];
