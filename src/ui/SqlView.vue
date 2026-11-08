@@ -20,6 +20,8 @@ import {
 const LINE_H = 20;
 const GUTTER_PX = 20;
 const BUFFER = 30;
+/** Empty space below the last line. */
+const BOTTOM_PAD = 30;
 
 const el = ref<HTMLElement>();
 const sizer = ref<HTMLElement>();
@@ -205,7 +207,7 @@ function chipTitle(id: string): string {
     <div
       ref="sizer"
       class="sizer"
-      :style="{ height: lines.length * LINE_H + 'px', minWidth: `${GUTTER_PX + (maxCols + 4) * charW}px` }"
+      :style="{ height: lines.length * LINE_H + BOTTOM_PAD + 'px', minWidth: `${GUTTER_PX + (maxCols + 4) * charW}px` }"
     >
       <div class="rows" :style="{ transform: `translateY(${visible.start * LINE_H}px)` }">
         <div

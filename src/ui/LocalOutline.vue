@@ -2,7 +2,7 @@
 // Local outline: a navigation table of the query around the cursor. It mirrors the query's
 // structure (columns, tables, conditions, ...) without trying to repeat all of its text.
 // A UNION is an entity of its own: a list of its arms and their tables.
-import { computed, nextTick, ref, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import type { Section, SectionKind } from "../core/model";
 import {
   caretToFold,
@@ -88,29 +88,10 @@ const clauses = computed(() => {
 });
 
 /**
- * Long lists are cut to the first few rows in every query you enter. Expanding one is remembered
- * for that list (until a new SQL is loaded); other lists still start cut.
+ * Lists longer than this scroll in a box of their own (which follows the cursor's row). The box
+ * takes the pane's free space, down to MIN_ROWS rows (then the pane itself scrolls).
  */
 const SHORT = 20;
-const expanded = ref(new Set<number>());
-watch(result, () => (expanded.value = new Set()));
-function setExpanded(id: number, on: boolean) {
-  const s = new Set(expanded.value);
-  if (on) s.add(id);
-  else s.delete(id);
-  expanded.value = s;
-}
-/**
- * The rows to show when cut: a window of SHORT rows that scrolls to keep the row under the
- * cursor in view, with the count of rows hidden above and below it.
- */
-function shown(clauseId: number, items: Section[]): { rows: Section[]; above: number; below: number } {
-  if (items.length <= SHORT + 1 || expanded.value.has(clauseId)) return { rows: items, above: 0, below: 0 };
-  const at = items.findIndex((it) => it.id === lo.value?.item);
-  // Centered on the cursor's row (column 30 shows 20-40), clamped to the ends of the list.
-  const start = Math.max(0, Math.min(items.length - SHORT, at - Math.floor(SHORT / 2)));
-  return { rows: items.slice(start, start + SHORT), above: start, below: items.length - start - SHORT };
-}
 
 // ---- actions ----------------------------------------------------------------------
 
@@ -146,15 +127,24 @@ function hover(id: number | null) {
   state.hoverSection = id;
 }
 
-// Keep the current row in view.
+// Keep the current row in view: when it changes, and when the pane (so a long list's box) resizes.
+function showCurrent() {
+  const target = el.value?.querySelector(".row.cur") ?? el.value?.querySelector(".clause.cur > .heading");
+  target?.scrollIntoView({ block: "nearest" });
+}
 watch(
   () => lo.value?.item ?? lo.value?.clause,
   async () => {
     await nextTick();
-    const target = el.value?.querySelector(".row.cur") ?? el.value?.querySelector(".clause.cur > .heading");
-    target?.scrollIntoView({ block: "nearest" });
+    showCurrent();
   },
 );
+let ro: ResizeObserver | undefined;
+onMounted(() => {
+  ro = new ResizeObserver(() => showCurrent());
+  ro.observe(el.value!);
+});
+onBeforeUnmount(() => ro?.disconnect());
 </script>
 
 <template>
@@ -189,7 +179,7 @@ watch(
         </div>
       </div>
 
-      <div v-for="{ c, items } in clauses" :key="c.id" class="clause" :class="{ cur: c.id === lo.clause }">
+      <div v-for="{ c, items } in clauses" :key="c.id" class="clause" :class="{ cur: c.id === lo.clause, 'has-scroll': items.length > SHORT }">
         <div class="heading" @click="go(c.id)" @mouseenter="hover(c.id)" @mouseleave="hover(null)">
           <span class="h">{{ HEADING[c.kind] ?? c.label }}</span>
           <span v-if="!items.length && c.detail" class="h-detail">{{ c.detail.replace(/^\w+\s+/, "") }}</span>
@@ -197,12 +187,9 @@ watch(
         </div>
 
         <div v-if="items.length" class="grid" :class="c.kind">
-          <template v-for="list in [shown(c.id, items)]" :key="c.id">
-            <div v-if="list.above" class="row more" :title="`${list.above} more · click to show all`" @click="setExpanded(c.id, true)">
-              <span class="text">▲ …</span>
-            </div>
+          <div class="rows" :class="{ scroll: items.length > SHORT }">
             <div
-              v-for="it in list.rows"
+              v-for="it in items"
               :key="it.id"
               class="row"
               :class="{ cur: it.id === lo.item }"
@@ -216,13 +203,7 @@ watch(
               <span class="text">{{ it.kind === "cond" || it.kind === "item" ? it.label : mid(unquote(it.label), 40) }}</span>
               <button v-if="isSubquery(it)" class="into" title="Go into this subquery" @click.stop="enter(it)">›</button>
             </div>
-            <div v-if="list.below" class="row more" :title="`${list.below} more · click to show all`" @click="setExpanded(c.id, true)">
-              <span class="text">▼ …</span>
-            </div>
-            <div v-if="!list.above && !list.below && expanded.has(c.id)" class="row more" title="Show fewer" @click="setExpanded(c.id, false)">
-              <span class="text">▴</span>
-            </div>
-          </template>
+          </div>
         </div>
       </div>
     </template>
@@ -232,6 +213,8 @@ watch(
 
 <style scoped>
 .local {
+  display: flex;
+  flex-direction: column;
   outline: none;
   overflow: auto;
   padding: 6px 8px 16px;
@@ -253,18 +236,37 @@ watch(
 .arm-op:hover {
   text-decoration: underline;
 }
-.row.more .text {
-  color: var(--accent);
-  font-family: var(--sans);
+/*
+ * A long list: as tall as it is if the pane has the room, else it shrinks to the free space (each
+ * long list in proportion to its length), down to 10 rows. Everything else keeps its height.
+ */
+.local > * {
+  flex: 0 0 auto;
 }
-.row.more .text {
-  font-size: 11px;
+.local > .clause.has-scroll {
+  flex: 0 1 auto;
+  min-height: calc(10 * 19px + 30px);
+  display: flex;
+  flex-direction: column;
 }
-.row.more .text {
-  color: var(--muted);
+.has-scroll > .heading {
+  flex: 0 0 auto;
 }
-.row.more:hover .text {
-  color: var(--accent);
+.has-scroll > .grid {
+  flex: 0 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.rows.scroll {
+  flex: 0 1 auto;
+  min-height: 0;
+  padding-bottom: 10px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  border: 1px solid var(--border-soft);
+  border-radius: 4px;
+  background: var(--bg);
 }
 .arm {
   display: flex;
@@ -336,6 +338,7 @@ watch(
 .row {
   display: flex;
   align-items: baseline;
+  height: 19px;
   padding: 2px 4px;
   cursor: pointer;
   border-radius: 3px;
