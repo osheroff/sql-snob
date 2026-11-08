@@ -44,6 +44,9 @@
 }
 * { box-sizing: border-box; }
 html, body, #app { height: 100%; margin: 0; }
+/* iOS Safari enlarges text in wide blocks ("text autosizing"), which breaks the code view's
+   character grid (positions are computed from a measured character width). */
+html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
 body {
   font-family: var(--sans);
   font-size: 14px;

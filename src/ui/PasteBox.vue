@@ -110,6 +110,10 @@ textarea {
   outline: none;
 }
 textarea:focus { border-color: var(--accent); }
+/* iOS zooms the page into any text field under 16px when it gets the focus. */
+@media (pointer: coarse) {
+  textarea { font-size: 16px; }
+}
 .dragging textarea { border-style: dashed; border-color: var(--accent); }
 .actions { display: flex; align-items: center; gap: 12px; }
 .spacer { flex: 1; }
