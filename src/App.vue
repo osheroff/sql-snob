@@ -1,10 +1,11 @@
 <script setup lang="ts">
-import { computed, ref, watch } from "vue";
+import { computed, ref, watch, watchEffect } from "vue";
 import {
   caretPos,
   collapseAll,
   copySectionText,
   expandAll,
+  folds,
   localOutline,
   mainLayout,
   reprint,
@@ -74,6 +75,22 @@ function editSql() {
 function onOpt() {
   reprint();
 }
+
+// Tab title: what's on screen, so tabs and history entries are told apart.
+watchEffect(() => {
+  let what = "";
+  if (state.status === "error") what = "Parse error";
+  else if (state.status === "ready") {
+    if (state.focus) what = folds.value[state.focus]?.name ?? "";
+    else {
+      // The main query's first table (top level: not inside a CTE or subquery fold).
+      const src = result.value?.sections.find((s) => s.kind === "source" && s.fold === null);
+      what = src?.target ?? src?.label ?? "";
+    }
+    what ||= "Query";
+  }
+  document.title = what ? `SQL Snob – ${what}` : "SQL Snob";
+});
 
 // Show what the URL says (paste box or `/q/<id>`) before child components read `state.sql`.
 openRoute();

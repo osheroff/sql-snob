@@ -63,7 +63,7 @@ This is a custom printer from CST to a Wadler-style Doc IR (`text`, `line`, `sof
 
 ### 5. Layout: `src/core/layout.ts`
 - `layout(doc, foldState, width)` returns `Line[]`. A line is a list of `Token`s: `{ text, kind: keyword|ident|string|number|op|comment|fold, nodeId? }`.
-- A folded node becomes one `fold` token (`▸ orders_cte`, `▸ measurements.columns (45)`).
+- A folded node becomes one `fold` token (`▸ orders_cte`, `▸ cat_sightings.columns (45)`).
 - Re-layout happens on every fold toggle, so it has to be fast. Cache the printed Doc per fold node and only re-lay the parts that changed.
 
 ### 6. UI: `src/ui/`
@@ -75,9 +75,9 @@ Layout: outline sidebar on the left, query view in the middle, column panel on t
   - One row per column: index, output name, then the formatted expression laid out at the panel's width. Multi-line expressions are indented under the name.
   - Filter box (by name or expression text) and toggle chips by `exprKind`, e.g. "hide passthroughs".
   - Clicking a row highlights that column in `SqlView`. Clicking a nested subquery chip focuses it in the main view.
-  - Its own breadcrumb, e.g. `root › measurements › columns`.
+  - Its own breadcrumb, e.g. `root › cat_sightings › columns`.
 - `Outline.vue`: sidebar tree of the `FoldTree`, column lists included. Click an item to scroll to it; double-click to focus it.
-- `Breadcrumbs.vue`: the focus path, e.g. `root › measurements › derived_2`.
+- `Breadcrumbs.vue`: the focus path, e.g. `root › cat_sightings › derived_2`.
 - **Focus (drill-down):** pick any fold node to make it the render root. Breadcrumbs go back up. The focus for the main view and the column panel is stored in the URL hash, so back and forward work. The SQL itself stays out of the URL.
 - Toolbar: expand all, collapse all, copy formatted SQL (the whole query, the focused node, or the focused column list), width setting.
 - `ParseError.vue`: when the parse fails, show the original text with the error line marked, plus a "view raw" mode that has highlighting and no formatting.

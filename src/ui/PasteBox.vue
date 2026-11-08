@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref } from "vue";
-import example from "../examples/measurements.sql?raw";
+import example from "../examples/cats.sql?raw";
 import { savedQueries, state, submitQuery } from "../state/store";
 import RecentQueries from "./RecentQueries.vue";
 
@@ -26,8 +26,8 @@ function loadExample() {
 <template>
   <div class="home" :class="{ 'has-recent': hasRecent }">
   <div class="paste" :class="{ dragging }" @dragover.prevent="dragging = true" @dragleave="dragging = false" @drop.prevent="onDrop">
-    <h1>sql-snob</h1>
-    <p class="sub">Paste a query. It's formatted, folded and navigable. Nothing leaves your browser.</p>
+    <h1><img src="/favicon.svg" alt="" class="logo" />SQL Snob</h1>
+    <p class="sub">Paste a query or drop a .sql file to make sense of the senseless, all locally in your browser.</p>
     <p v-if="state.notice" class="notice">{{ state.notice }}</p>
     <textarea
       v-model="text"
@@ -84,7 +84,8 @@ function loadExample() {
   }
   .side { padding: 0 16px 24px; }
 }
-h1 { margin: 0; font-size: 28px; letter-spacing: -0.02em; }
+h1 { margin: 0; font-size: 28px; letter-spacing: -0.02em; display: flex; align-items: center; gap: 10px; }
+.logo { width: 40px; height: 40px; }
 .sub { margin: 0; color: var(--muted); }
 .notice {
   margin: 0;
