@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <!-- A silver cloche (serving dome) on a tray. -->
+  <defs>
+    <linearGradient id="dome" x1="0.15" y1="0.1" x2="0.85" y2="1">
+      <stop offset="0" stop-color="#fbfcfd"/>
+      <stop offset="0.45" stop-color="#c9cfd6"/>
+      <stop offset="1" stop-color="#7d8792"/>
+    </linearGradient>
+    <linearGradient id="tray" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#d9dee3"/>
+      <stop offset="1" stop-color="#8a939d"/>
+    </linearGradient>
+  </defs>
+  <!-- knob -->
+  <rect x="15" y="7.6" width="2" height="2.6" fill="#8a939d" stroke="#3f464e" stroke-width="0.8"/>
+  <circle cx="16" cy="6.6" r="2.3" fill="url(#dome)" stroke="#3f464e" stroke-width="1"/>
+  <!-- dome -->
+  <path d="M4.5 23.5 A11.5 13.5 0 0 1 27.5 23.5 Z" fill="url(#dome)" stroke="#3f464e" stroke-width="1.1" stroke-linejoin="round"/>
+  <!-- highlight -->
+  <path d="M8.6 19.5 A8 9.5 0 0 1 13.6 12.4" fill="none" stroke="#ffffff" stroke-width="1.6" stroke-linecap="round" opacity="0.9"/>
+  <!-- tray -->
+  <rect x="1.8" y="23" width="28.4" height="3.6" rx="1.8" fill="url(#tray)" stroke="#3f464e" stroke-width="1.1"/>
+</svg>
