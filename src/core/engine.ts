@@ -4,6 +4,7 @@
 import { parse, type Program } from "sql-parser-cst";
 import type { Dialect, DialectChoice, ParseError, PrintOptions, PrintResult } from "./model";
 import { print } from "./print";
+import { maskPathColons, restorePaths } from "./snowflakePath";
 
 export type ParseOutcome = { ok: true; cst: Program; dialect: Dialect } | { ok: false; error: ParseError };
 
@@ -26,14 +27,17 @@ export function parseSql(sql: string, dialect: DialectChoice = "auto"): ParseOut
 }
 
 function parseIn(sql: string, dialect: Dialect): ParseOutcome {
+  // Snowflake `col:path` is parsed as `col%path`, then turned back into `:` nodes.
+  const masked = maskPathColons(sql);
   try {
-    const cst = parse(sql, {
+    let cst = parse(masked?.text ?? sql, {
       dialect,
       paramTypes: paramTypes[dialect],
       includeRange: true,
       includeComments: true,
       filename: "input",
     });
+    if (masked) cst = restorePaths(cst, masked.positions);
     return { ok: true, cst, dialect };
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);

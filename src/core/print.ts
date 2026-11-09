@@ -134,6 +134,7 @@ function opName(op: N): string {
 
 function opRank(op: N): number {
   const name = opName(op);
+  if (name === ":") return 7; // Snowflake path access binds tightest
   if (name === "OR") return 1;
   if (name === "AND") return 2;
   if (COMPARISON_OPS.has(name)) return 4;
@@ -922,6 +923,7 @@ class Printer {
         indent(items.slice(1).map((it, i) => [line, this.kw(ops[i]), space, this.node(it, n)])),
       ]);
     }
+    if (op === ":") return [this.node(n.left, n), text(":", "op"), this.node(n.right, n)];
     // The right side gets its own group so a multi-line left side doesn't force a break after the operator.
     return [this.node(n.left, n), space, this.operator(n.operator, n), group(indent([line, this.node(n.right, n)]))];
   }
@@ -1105,6 +1107,9 @@ function classify(expr: N, alias: N, sameName: boolean): ColumnKind {
   switch (expr.type) {
     case "identifier":
     case "all_columns":
+      return !alias || sameName ? "passthrough" : "rename";
+    case "binary_expr":
+      if (expr.operator !== ":") return "other";
       return !alias || sameName ? "passthrough" : "rename";
     case "member_expr":
       if (expr.property?.type === "array_subscript") return "other";
