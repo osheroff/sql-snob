@@ -5,7 +5,7 @@ import {
   canExpandAll,
   caretPos,
   collapseAll,
-  copySectionText,
+  copyText,
   expandAll,
   folds,
   localOutline,
@@ -64,9 +64,9 @@ function toggleFocus() {
 
 const copied = ref(false);
 async function copy() {
-  const l = localOutline.value;
-  if (!l) return;
-  await navigator.clipboard.writeText(copySectionText(l.query));
+  const text = copyText();
+  if (!text) return;
+  await navigator.clipboard.writeText(text);
   copied.value = true;
   setTimeout(() => (copied.value = false), 1200);
 }
@@ -131,7 +131,7 @@ openRoute();
           :title="state.focus ? 'Show the whole SQL again' : curFold ? `Focus on ${folds[curFold]?.name}` : 'Show only the query around the cursor'"
           @click="toggleFocus"
         >{{ state.focus ? "Unfocus" : "Focus" }}</button>
-        <button class="btn" title="Copy the SQL of the query around the cursor, fully expanded" @click="copy">
+        <button class="btn" title="Copy all the SQL in the view, fully expanded" @click="copy">
           {{ copied ? "Copied" : "Copy SQL" }}
         </button>
         <button

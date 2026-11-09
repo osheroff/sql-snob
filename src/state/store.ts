@@ -862,37 +862,3 @@ export function applyHash(initial = false): void {
 }
 
 window.addEventListener("popstate", openRoute);
-
-/** Formatted SQL of one section (e.g. a subquery), fully expanded and dedented. */
-export function copySectionText(id: number): string {
-  const r = result.value;
-  if (!r) return "";
-  const sec = r.sections[id];
-  const root = sec.fold ? focusDoc(sec.fold) : r.doc;
-  const lay = layout(root, { width: state.width, isOpen: () => true, label }, sec.fold ?? null);
-  const tags = sectionTags(id);
-  // A section is contiguous in the output: take everything from its first token to its last.
-  const inSec = (t: Token) => !!t.tag && tags.has(t.tag);
-  let first = -1;
-  let last = -1;
-  lay.lines.forEach((l, i) => {
-    if (l.tokens.some(inSec)) {
-      if (first < 0) first = i;
-      last = i;
-    }
-  });
-  const rows: { col: number; s: string }[] = [];
-  for (let i = first; first >= 0 && i <= last; i++) {
-    const toks = lay.lines[i].tokens;
-    let from = 0;
-    let to = toks.length;
-    if (i === first) from = toks.findIndex(inSec);
-    if (i === last) to = toks.length - [...toks].reverse().findIndex(inSec);
-    let col = lay.lines[i].indent;
-    for (let j = 0; j < from; j++) col += toks[j].s.length;
-    rows.push({ col, s: toks.slice(from, to).map((t) => t.s).join("").trimEnd() });
-  }
-  if (!rows.length) return "";
-  const min = Math.min(...rows.slice(1).map((r) => r.col), Infinity);
-  return rows.map((r, i) => (i === 0 ? r.s.trimStart() : " ".repeat(Math.max(0, r.col - min)) + r.s)).join("\n");
-}
