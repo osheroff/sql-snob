@@ -198,8 +198,9 @@ function setResult(r: PrintResult, ms: { parse: number; print: number }) {
   state.error = null;
 }
 
-/** Back to the paste box (keeping the current SQL in it), as a new history entry. */
-export function reset(): void {
+/** Back to the paste box as a new history entry; `clear` empties it, else it keeps the current SQL. */
+export function reset(clear = false): void {
+  if (clear) state.sql = "";
   showPasteBox();
   history.pushState(null, "", "/");
 }
@@ -427,6 +428,11 @@ export function toggle(id: string): void {
   setOpen((s) => (s.has(id) ? s.delete(id) : s.add(id)));
 }
 
+/** Folds as the outline tree shows them: column lists are left out, their contents lifted up a level. */
+export function outlineKids(ids: string[]): string[] {
+  return ids.flatMap((id) => (folds.value[id]?.kind === "columns" ? outlineKids(folds.value[id].children) : [id]));
+}
+
 export function descendants(id: string | null): string[] {
   const out: string[] = [];
   const kids = id ? (folds.value[id]?.children ?? []) : (result.value?.roots ?? []);
@@ -452,7 +458,7 @@ export function collapseAll(): void {
   setOpen((s) => ids.forEach((d) => !folds.value[d].defaultOpen && s.delete(d)));
 }
 
-/** Would Expand all / Collapse all change anything (in the current focus)? */
+/** Would Expand / Collapse change anything (in the current focus)? */
 export const canExpandAll = computed(() => descendants(state.focus).some((d) => !openSet.value.has(d)));
 export const canCollapseAll = computed(() =>
   descendants(state.focus).some((d) => !folds.value[d].defaultOpen && openSet.value.has(d)),

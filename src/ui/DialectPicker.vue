@@ -16,7 +16,6 @@ function onChange(ev: Event) {
       <option value="postgresql">PostgreSQL</option>
       <option value="mysql">MySQL</option>
     </select>
-    syntax
   </label>
 </template>
 

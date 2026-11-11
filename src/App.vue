@@ -19,6 +19,18 @@ import {
   toggleOutline,
 } from "./state/store";
 import { shareQuery } from "./state/share";
+import {
+  Check,
+  ChevronsDownUp,
+  ChevronsUpDown,
+  CircleQuestionMark,
+  Copy,
+  Crosshair,
+  PanelLeftOpen,
+  Plus,
+  Share,
+  SlidersHorizontal,
+} from "lucide-vue-next";
 import DialectPicker from "./ui/DialectPicker.vue";
 import Sidebar from "./ui/Sidebar.vue";
 import ParseErrorView from "./ui/ParseErrorView.vue";
@@ -122,44 +134,46 @@ openRoute();
     <Sidebar v-if="state.outlineOpen" class="outline" />
     <div class="main">
       <div class="tools">
-        <button class="btn icon sidebar-toggle" :title="state.outlineOpen ? 'Hide sidebar' : 'Show sidebar'" @click="toggleOutline">{{ state.outlineOpen ? "«" : "»" }}</button>
+        <button v-if="!state.outlineOpen" class="btn icon sidebar-toggle" title="Show sidebar" @click="toggleOutline"><PanelLeftOpen :size="14" /></button>
         <QueryPath class="qpath" />
+        <button class="btn" title="Back to the paste box with an empty query" @click="reset(true)"><Plus :size="14" />New query</button>
+        <button class="btn" title="Copy all the SQL in the view, fully expanded" @click="copy">
+          <Check v-if="copied" :size="14" /><Copy v-else :size="14" />{{ copied ? "Copied" : "Copy" }}
+        </button>
         <button
           class="btn"
           :class="{ on: state.focus }"
           :disabled="!state.focus && !curFold"
           :title="state.focus ? 'Show the whole SQL again' : curFold ? `Focus on ${folds[curFold]?.name}` : 'Show only the query around the cursor'"
           @click="toggleFocus"
-        >{{ state.focus ? "Unfocus" : "Focus" }}</button>
-        <button class="btn" title="Copy all the SQL in the view, fully expanded" @click="copy">
-          {{ copied ? "Copied" : "Copy SQL" }}
-        </button>
+        ><Crosshair :size="14" />{{ state.focus ? "Unfocus" : "Focus" }}</button>
+        <button class="btn" title="Expand everything in view" :disabled="!canExpandAll" @click="expandAll"><ChevronsUpDown :size="14" />Expand</button>
+        <button class="btn" title="Collapse everything in view" :disabled="!canCollapseAll" @click="collapseAll"><ChevronsDownUp :size="14" />Collapse</button>
         <button
           class="btn"
           title="An encrypted copy will be sent to the server"
           :disabled="shareMsg === 'Sharing…'"
           @click="share"
-        >{{ shareMsg ?? "Share" }}</button>
-        <button class="btn" title="Expand everything in view" :disabled="!canExpandAll" @click="expandAll">Expand all</button>
-        <button class="btn" title="Collapse everything in view" :disabled="!canCollapseAll" @click="collapseAll">Collapse all</button>
+        ><Share :size="14" />{{ shareMsg ?? "Share" }}</button>
+      </div>
+      <SqlView class="code" />
+    </div>
+    <footer class="status">
+      <span class="pos">{{ position }}</span>
+      <span class="right">
+        <DialectPicker />
         <div class="opts-wrap" @mouseleave="closeOptsSoon" @mouseenter="keepOpts">
-          <button class="btn" @click="showOpts = !showOpts">Options</button>
+          <button class="foot-btn" @click="showOpts = !showOpts"><SlidersHorizontal :size="15" />Options</button>
           <!-- The zone's transparent padding is a margin of error around the panel for the mouse. -->
           <div v-if="showOpts" class="opts-zone"><div class="opts">
             <label><input v-model="state.opts.removeParens" type="checkbox" @change="onOpt" /> Remove redundant parentheses</label>
             <label><input v-model="state.opts.hideObviousCasts" type="checkbox" @change="onOpt" /> Hide obvious casts (<code>'x'::TEXT</code>)</label>
             <label><input v-model="state.opts.collapseAliases" type="checkbox" @change="onOpt" /> Collapse <code>"X" AS "X"</code></label>
             <label><input v-model="state.opts.stripQuotes" type="checkbox" @change="onOpt" /> Remove unneeded quotes (<code>"rows"."id"</code>)</label>
-            <button class="btn new" @click="reset">New query…</button>
           </div></div>
         </div>
-        <button class="btn" title="Help" @click="showHelp = !showHelp">?</button>
-      </div>
-      <SqlView class="code" />
-    </div>
-    <footer class="status">
-      <span>{{ position }}</span>
-      <DialectPicker />
+        <button class="foot-btn" title="Help" @click="showHelp = !showHelp"><CircleQuestionMark :size="16" /></button>
+      </span>
     </footer>
     <div v-if="showHelp" class="help" @click="showHelp = false">
       <div class="help-card" @click.stop>
@@ -218,26 +232,27 @@ openRoute();
   margin-right: 8px;
 }
 .tools .btn {
-  font-size: 12px;
-  padding: 3px 10px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 13px;
+  padding: 5px 12px;
 }
 .tools .btn.on {
   border-color: var(--accent);
   color: var(--accent);
 }
 .tools .btn.icon {
-  padding: 3px 7px;
-}
-.new {
-  align-self: flex-start;
+  padding: 5px 9px;
 }
 .opts-wrap { position: relative; }
 .opts-zone {
   position: absolute;
   right: -16px;
-  top: 100%;
+  bottom: 100%;
   z-index: 10;
-  padding: 4px 16px 16px;
+  padding: 16px 16px 8px;
+  font-size: 13px;
 }
 .opts {
   background: var(--panel-bg);
@@ -256,13 +271,29 @@ openRoute();
   display: flex;
   justify-content: space-between;
   gap: 16px;
-  padding: 3px 12px;
+  padding: 6px 16px;
+  align-items: center;
   font-size: 11px;
   border-top: 1px solid var(--border);
   background: var(--panel-bg);
   white-space: nowrap;
-  overflow: hidden;
 }
+.pos { overflow: hidden; text-overflow: ellipsis; }
+.right { display: flex; align-items: center; gap: 6px; }
+.foot-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font: inherit;
+  font-size: 13px;
+  color: var(--fg);
+  background: none;
+  border: 0;
+  border-radius: 4px;
+  padding: 3px 8px;
+  cursor: pointer;
+}
+.foot-btn:hover { color: var(--accent); background: var(--hov); }
 .help {
   position: fixed;
   inset: 0;

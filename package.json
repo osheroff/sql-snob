@@ -11,6 +11,7 @@
     "deploy": "npm run build && wrangler deploy"
   },
   "dependencies": {
+    "lucide-vue-next": "^1.0.0",
     "sql-parser-cst": "^0.44.1",
     "vue": "^3.5.45"
   },

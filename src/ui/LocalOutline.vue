@@ -12,6 +12,7 @@ import {
   result,
   sectionChildren,
   state,
+  toggleOutline,
 } from "../state/store";
 import { unquote } from "./labels";
 
@@ -183,7 +184,8 @@ onBeforeUnmount(() => ro?.disconnect());
         <div class="heading" @click="go(c.id)" @mouseenter="hover(c.id)" @mouseleave="hover(null)">
           <span class="h">{{ HEADING[c.kind] ?? c.label }}</span>
           <span v-if="!items.length && c.detail" class="h-detail">{{ c.detail.replace(/^\w+\s+/, "") }}</span>
-          <span v-if="items.length > 1" class="count">{{ items.length }}</span>
+          <button v-if="c.kind === 'select'" class="collapse" title="Hide sidebar" @click.stop="toggleOutline">«</button>
+          <span v-else-if="items.length > 1" class="count">{{ items.length }}</span>
         </div>
 
         <div v-if="items.length" class="grid" :class="c.kind">
@@ -324,6 +326,21 @@ onBeforeUnmount(() => ro?.disconnect());
   color: var(--fg);
   overflow: hidden;
   text-overflow: ellipsis;
+}
+.collapse {
+  margin-left: auto;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--muted);
+  border-radius: 3px;
+  font-size: 12px;
+  line-height: 16px;
+  padding: 1px 8px;
+  cursor: pointer;
+}
+.collapse:hover {
+  border-color: var(--accent);
+  color: var(--fg);
 }
 .count {
   margin-left: auto;
