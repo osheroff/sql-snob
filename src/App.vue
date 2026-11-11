@@ -23,7 +23,6 @@ import {
   Check,
   ChevronsDownUp,
   ChevronsUpDown,
-  CircleQuestionMark,
   Copy,
   Crosshair,
   PanelLeftOpen,
@@ -39,7 +38,6 @@ import QueryPath from "./ui/QueryPath.vue";
 import SqlView from "./ui/SqlView.vue";
 
 const showOpts = ref(false);
-const showHelp = ref(false);
 // Options closes when the mouse leaves it (and its button), after a grace period.
 let optsTimer = 0;
 function closeOptsSoon() {
@@ -54,7 +52,7 @@ function keepOpts() {
 watch(
   () => state.status,
   (s) => {
-    if (s !== "ready") showOpts.value = showHelp.value = false;
+    if (s !== "ready") showOpts.value = false;
   },
 );
 
@@ -172,24 +170,8 @@ openRoute();
             <label><input v-model="state.opts.stripQuotes" type="checkbox" @change="onOpt" /> Remove unneeded quotes (<code>"rows"."id"</code>)</label>
           </div></div>
         </div>
-        <button class="foot-btn" title="Help" @click="showHelp = !showHelp"><CircleQuestionMark :size="16" /></button>
       </span>
     </footer>
-    <div v-if="showHelp" class="help" @click="showHelp = false">
-      <div class="help-card" @click.stop>
-        <h3>Mouse</h3>
-        <dl>
-          <dt>Click chip</dt><dd>Expand</dd>
-          <dt>Alt-click chip</dt><dd>Expand everything inside</dd>
-          <dt>⌘/Ctrl-click chip</dt><dd>Focus</dd>
-          <dt>Gutter ▾ / ▸</dt><dd>Collapse / expand</dd>
-          <dt>← → ↑ ↓</dt><dd>Move the cursor</dd>
-          <dt>Outline</dt><dd>Click to show, double-click to focus</dd>
-          <dt>Focus / Unfocus</dt><dd>Show only the query in the sidebar / everything</dd>
-          <dt>Local outline</dt><dd>Click a row to move the cursor there · › to go into a subquery</dd>
-        </dl>
-      </div>
-    </div>
   </div>
 </template>
 
@@ -294,25 +276,6 @@ openRoute();
   cursor: pointer;
 }
 .foot-btn:hover { color: var(--accent); background: var(--hov); }
-.help {
-  position: fixed;
-  inset: 0;
-  background: var(--scrim);
-  display: grid;
-  place-items: center;
-  z-index: 20;
-}
-.help-card {
-  background: var(--panel-bg);
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  padding: 16px 20px;
-  max-width: 520px;
-}
-.help-card h3 { margin: 4px 0 8px; font-size: 13px; }
-dl { display: grid; grid-template-columns: 9em 1fr; gap: 4px 12px; margin: 0 0 12px; font-size: 13px; }
-dt { font-family: var(--mono); color: var(--accent); }
-dd { margin: 0; }
 @media (max-width: 800px) {
   /* No sidebar on narrow screens, open or closed (`.outline-closed` must be overridden too). */
   .app,
