@@ -713,6 +713,14 @@ export const localOutline = computed<LocalOutline | null>(() => {
   };
 });
 
+/** The outline fold the caret is in: the fold of the query around it (skipping `columns` folds), or null at top level. */
+export const caretFold = computed<string | null>(() => {
+  const l = localOutline.value;
+  let f = l ? (result.value?.sections[l.query]?.fold ?? null) : null;
+  while (f && folds.value[f]?.kind === "columns") f = folds.value[f].parent;
+  return f;
+});
+
 export function sectionChildren(id: number): number[] {
   return sectionKids.get(id) ?? [];
 }

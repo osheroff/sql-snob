@@ -1,12 +1,25 @@
 <script setup lang="ts">
-import { computed } from "vue";
-import { caretToFold, folds, outlineKids, setFocus, state } from "../state/store";
+import { computed, nextTick, ref, watch } from "vue";
+import { caretFold, caretToFold, folds, outlineKids, setFocus, state } from "../state/store";
 
 const props = defineProps<{ id: string; depth: number }>();
 
 const f = computed(() => folds.value[props.id]);
 const kids = computed(() => outlineKids(f.value?.children ?? []));
 const ICON: Record<string, string> = { cte: "W", derived: "F", subquery: "S", branch: "U" };
+
+const row = ref<HTMLElement>();
+const here = computed(() => caretFold.value === props.id);
+// Keep the row of the query the caret is in visible in the (scrolling) outline pane.
+watch(
+  here,
+  async (h) => {
+    if (!h) return;
+    await nextTick();
+    row.value?.scrollIntoView({ block: "nearest" });
+  },
+  { immediate: true },
+);
 
 function onClick() {
   // Moving the cursor there keeps "This query" in sync with what you clicked.
@@ -20,8 +33,9 @@ function onDbl() {
 <template>
   <li v-if="f">
     <div
+      ref="row"
       class="node"
-      :class="{ focus: state.focus === id, cur: state.cursor === id }"
+      :class="{ focus: state.focus === id, cur: state.cursor === id, here }"
       :style="{ paddingLeft: depth * 12 + 6 + 'px' }"
       :title="`${f.name} (${f.kind})\nClick: go there · Double-click: focus`"
       @click="onClick"
@@ -50,7 +64,8 @@ ul { list-style: none; margin: 0; padding: 0; }
   font-size: 12px;
 }
 .node:hover { background: var(--hov); }
-.node.focus { background: var(--hl); font-weight: 600; }
+.node.focus { font-weight: 600; }
+.node.here { background: var(--hl); box-shadow: inset 2px 0 0 var(--accent); }
 .node.cur { outline: 1px solid var(--accent); outline-offset: -1px; }
 .icon {
   flex: 0 0 16px;
